@@ -13,6 +13,7 @@ from ideaclustermanager import AppContext
 from ideaclustermanager.app.accounts.ldapclient import OpenLDAPClient, LdapClientOptions
 from ideasdk.utils import Utils
 
+from contextlib import contextmanager
 import ldap  # noqa
 
 
@@ -27,6 +28,11 @@ class MockLdapClient(OpenLDAPClient):
                 root_password='mock',
             ),
         )
+
+    @contextmanager
+    def one_server(self):
+        # there is no server to connect to: the methods below answer for it
+        yield
 
     def add_s(self, dn, modlist):
         trace_message = (

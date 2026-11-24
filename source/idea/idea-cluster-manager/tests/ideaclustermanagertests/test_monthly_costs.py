@@ -532,7 +532,7 @@ def test_collector_snapshot_sums_volumes_per_filesystem(service):
     collector.targets = lambda: [
         SimpleNamespace(name='data', endpoint='svm-test.fs-test.fsx.example')
     ]
-    collector._quota_reports['data'] = (
+    collector._collected_reports['data'] = (
         123,
         [
             {
@@ -581,3 +581,102 @@ def test_stored_collector_snapshot_preserves_user_keys(service, monkeypatch):
         'user.a': 100,
         'user-b': 300,
     }
+
+
+def accounts_for_home_scan(base, deleted_after_listing):
+    """
+    the accounts the cost scan lists, each with a home under base holding its own bytes:
+    two enabled, one disabled, and one deleted between the listing and its scan
+    """
+    import os
+
+    from ideadatamodel import Group, User
+
+    uid = 65534 if os.geteuid() == 0 else os.getuid()
+    gid = 65534 if os.geteuid() == 0 else os.getgid()
+    # as in the storage tests: unprivileged, the worker keeps this process's own groups
+    gids = [gid] if os.geteuid() == 0 else sorted(set(os.getgroups()) | {gid})
+    groups = {str(g): Group(name=str(g), gid=g) for g in gids}
+    sizes = {'enabled-a': 10, 'enabled-b': 20, 'disabled-c': 30, 'deleted-d': 40}
+    for name, size in sizes.items():
+        home = os.path.join(base, name)
+        os.mkdir(home)
+        with open(os.path.join(home, 'data.bin'), 'wb') as f:
+            f.write(b'x' * size)
+        if os.geteuid() == 0:
+            for path in (home, os.path.join(home, 'data.bin')):
+                os.chown(path, uid, gid)
+    users = {
+        name: User(
+            username=name,
+            uid=uid,
+            gid=gid,
+            additional_groups=list(groups),
+            enabled=name != 'disabled-c',
+        )
+        for name in sizes
+    }
+
+    def get_user(name):
+        # listed, then deleted before its home is measured
+        return None if name in deleted_after_listing else users.get(name)
+
+    listing = [SimpleNamespace(username=name) for name in sizes]
+    return SimpleNamespace(
+        get_user=get_user,
+        get_group=groups.get,
+        list_users=lambda request: SimpleNamespace(listing=listing, paginator=None),
+    ), sizes
+
+
+def test_the_cost_home_scan_measures_disabled_accounts_and_skips_vanished_ones(
+    service, monkeypatch, tmp_path
+):
+    import os
+    import tempfile
+
+    from ideaclustermanager.app.filesystem import storage_usage
+
+    base = tempfile.mkdtemp(dir='/tmp')
+    os.chmod(base, 0o755)
+    accounts, sizes = accounts_for_home_scan(base, deleted_after_listing={'deleted-d'})
+    service.context.accounts = accounts
+
+    class Homes:
+        def __init__(self, context, username):
+            self.username = username
+
+        def get_user_home(self):
+            return os.path.join(base, self.username)
+
+    monkeypatch.setattr(storage_usage, 'FileSystemHelper', Homes)
+    scan_context = SimpleNamespace(
+        accounts=accounts, logger=lambda _: Mock(), config=lambda: Mock()
+    )
+    service.context.storage_usage = storage_usage.StorageUsageService(scan_context)
+    try:
+        homes = service._home_usage()
+    finally:
+        service.context.storage_usage._workers.shutdown()
+
+    # the real measure_for_costs, the real identity: the disabled account is measured,
+    # the deleted one left out, and the run still answers for everyone else
+    assert homes is not None
+    assert homes['users'] == {
+        'enabled-a': sizes['enabled-a'],
+        'enabled-b': sizes['enabled-b'],
+        'disabled-c': sizes['disabled-c'],
+    }
+    assert homes['skipped'] == ['deleted-d']
+
+
+def test_a_disabled_account_still_gets_no_file_identity_by_default(tmp_path):
+    from ideasdk.filesystem.user_identity import UserIdentity
+    from ideadatamodel import exceptions as soca_exceptions
+
+    accounts, _ = accounts_for_home_scan(str(tmp_path), deleted_after_listing=set())
+    with pytest.raises(soca_exceptions.SocaException) as refused:
+        UserIdentity(accounts, 'disabled-c')
+    assert refused.value.error_code == 'UNAUTHORIZED_ACCESS'
+    # the measuring scan alone admits it
+    assert UserIdentity(accounts, 'disabled-c', allow_disabled=True).uid > 0

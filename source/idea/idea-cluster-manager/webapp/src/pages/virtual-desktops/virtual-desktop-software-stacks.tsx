@@ -55,6 +55,32 @@ export interface VirtualDesktopSoftwareStacksState {
     showRefreshResultsModal: boolean
 }
 
+/** The date is a day, stored as midnight UTC: in the viewer's zone it would be the day before. */
+export function expiryDay(value: string): string {
+    return new Date(value).toLocaleDateString(undefined, {timeZone: 'UTC'})
+}
+
+/** A stack the monthly rebuild feeds, or whose image is exempt, has no date. */
+/** Base stacks are the stock images every build starts from; their ids are ss-base-<os>-<arch>. */
+export function isBaseStack(stack?: VirtualDesktopSoftwareStack): boolean {
+    return stack?.stack_id?.startsWith('ss-base-') ?? false
+}
+
+export function describeExpiry(stack: VirtualDesktopSoftwareStack) {
+    if (!stack.effective_expires_on) {
+        return 'Never'
+    }
+    const day = expiryDay(stack.effective_expires_on)
+    switch (stack.expiry_state) {
+        case 'expired':
+            return <StatusIndicator type="error">Expired {day}</StatusIndicator>
+        case 'expiring':
+            return <StatusIndicator type="warning">{day}</StatusIndicator>
+        default:
+            return day
+    }
+}
+
 const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSoftwareStack>[] = [
     {
         id: 'name',
@@ -80,6 +106,16 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
         header: 'Description',
         cell: e => e.description,
         sortingField: 'description'
+    },
+    {
+        id: 'owner',
+        header: 'Owner',
+        cell: e => e.owner || '-'
+    },
+    {
+        id: 'expires',
+        header: 'Expires',
+        cell: e => describeExpiry(e)
     },
     {
         id: 'ami_id',
@@ -140,9 +176,10 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
     }
 ]
 
-class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStacksProps, VirtualDesktopSoftwareStacksState> {
+export class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStacksProps, VirtualDesktopSoftwareStacksState> {
 
     listing: RefObject<IdeaListView | null>
+    refreshTimer?: ReturnType<typeof setTimeout>
     createSoftwareStackForm: RefObject<IdeaForm | null>
     editSoftwareStackForm: RefObject<VirtualDesktopSoftwareStackEditForm | null>
     softwareStackActionConfirmModal: RefObject<IdeaConfirm | null>
@@ -234,6 +271,16 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
 
     getListing(): IdeaListView {
         return this.listing.current!
+    }
+
+    /** Reloads the list once the change has reached it. Nothing runs after the page is left. */
+    refreshSoon() {
+        clearTimeout(this.refreshTimer)
+        this.refreshTimer = setTimeout(() => this.listing.current?.fetchRecords(), 3000)
+    }
+
+    componentWillUnmount() {
+        clearTimeout(this.refreshTimer)
     }
 
     isSelected(): boolean {
@@ -356,9 +403,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         softwareStackSelected: false,
                         clonedSoftwareStack: undefined
                     }, () => {
-                        setTimeout(() => {
-                            this.getListing().fetchRecords();
-                        }, 3000); // Wait 3 seconds before refreshing
+                        this.refreshSoon();
                     });
                 }).catch(error => {
                     this.getCreateSoftwareStackForm().setError(error.errorCode, error.message)
@@ -381,8 +426,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     data_type: 'str',
                     param_type: 'text',
                     validate: {
-                        required: true,
-                        regex: '^.{3,24}$'
+                        required: true
                     }
                 },
                 {
@@ -465,32 +509,6 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         required: true
                     }
                 },
-/*                {
-                    name: 'pool_enabled',
-                    title: 'Pool Enabled',
-                    description: 'Select to activate warming pool',
-                    data_type: 'boolean',
-                    param_type: 'confirm',
-                    default: false,
-                    validate: {
-                        required: true
-                    }
-                },
-                {
-                    name: 'pool_asg_name',
-                    title: 'Pool ASG',
-                    description: 'Pool ASG',
-                    data_type: 'str',
-                    param_type: 'text',
-                    validate: {
-                        // TODO Regex
-                        required: false
-                    },
-                    when: {
-                        param: 'pool_enabled',
-                        eq: true
-                    }
-                }*/
                 {
                     name: 'allowed_instance_types',
                     title: 'Allowed Instance Families/Types',
@@ -581,8 +599,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
 
     buildRefreshResultsModal() {
         const rows = this.state.refreshResults ?? [];
-        const statusType = (status?: string) => status === 'updated' ? 'success' : status === 'base_updated' ? 'info' : status === 'up_to_date' ? 'stopped' : 'error';
-        const statusText = (status?: string) => status === 'updated' ? 'Updated' : status === 'base_updated' ? 'Base updated' : status === 'up_to_date' ? 'Up to date' : 'Error';
+        const statusType = (status?: string) => status === 'updated' ? 'success' : status === 'base_updated' ? 'info' : status === 'up_to_date' || status === 'unsupported' ? 'stopped' : 'error';
+        const statusText = (status?: string) => status === 'updated' ? 'Updated' : status === 'base_updated' ? 'Base updated' : status === 'up_to_date' ? 'Up to date' : status === 'unsupported' ? 'Not available in this partition' : 'Error';
         return (
             <Modal
                 visible={this.state.showRefreshResultsModal}
@@ -608,6 +626,23 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                 />
             </Modal>
         )
+    }
+
+    extendSoftwareStack = () => {
+        const stack = this.getSelectedSoftwareStack()
+        if (!stack) {
+            return
+        }
+        this.getVirtualDesktopAdminClient().extendSoftwareStack({
+            stack_id: stack.stack_id,
+            base_os: stack.base_os
+        }).then(response => {
+            const day = response.software_stack?.effective_expires_on
+            this.setFlashMessage(`${stack.name} now expires ${day ? expiryDay(day) : 'later'}.`, 'success')
+            this.getListing().fetchRecords()
+        }).catch(error => {
+            this.setFlashMessage(`Could not extend ${stack.name}: ${error.message}`, 'error')
+        })
     }
 
     deleteSoftwareStack = () => {
@@ -692,9 +727,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 this.setState({
                                     softwareStackSelected: false
                                 }, () => {
-                                    setTimeout(() => {
-                                        this.getListing().fetchRecords();
-                                    }, 3000); // Wait 3 seconds before refreshing
+                                    this.refreshSoon();
                                 });
                             } else {
                                 this.setFlashMessage(
@@ -763,7 +796,9 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     allowed_instance_types?: string[],
                     ami_id?: string,
                     min_ram?: number,
-                    min_storage?: number
+                    min_storage?: number,
+                    owner?: string,
+                    expiry?: {expires_on?: string, clear_expires_on?: boolean}
                 ) => {
                     return this.getVirtualDesktopAdminClient().updateSoftwareStack({
                             software_stack: {
@@ -777,6 +812,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 launch_tenancy: launch_tenancy,
                                 allowed_instance_types: allowed_instance_types,
                                 ami_id: ami_id,
+                                owner: owner,
+                                ...expiry,
                                 min_ram: min_ram ? {
                                     value: min_ram,
                                     unit: 'gb'
@@ -796,9 +833,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         this.setState({
                             softwareStackSelected: false
                         }, () => {
-                            setTimeout(() => {
-                                this.getListing().fetchRecords();
-                            }, 3000); // Wait 3 seconds before refreshing
+                            this.refreshSoon();
                         });
                         return Promise.resolve(true)
                     }).catch(error => {
@@ -819,9 +854,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     this.setState({
                         softwareStackSelected: false
                     }, () => {
-                        setTimeout(() => {
-                            this.getListing().fetchRecords();
-                        }, 3000); // Wait 3 seconds before refreshing
+                        this.refreshSoon();
                     });
                 }}
             />
@@ -866,6 +899,13 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         }
                     },
                     {
+                        id: 'extend-software-stack',
+                        text: 'Extend Expiry',
+                        disabled: this.getSelectedSoftwareStacks().length !== 1 || !this.getSelectedSoftwareStack()?.effective_expires_on,
+                        disabledReason: 'Select one stack that has an expiry date',
+                        onClick: this.extendSoftwareStack
+                    },
+                    {
                         id: 'clone-software-stack',
                         text: 'Clone Stack',
                         disabled: !this.isSelected() || this.getSelectedSoftwareStacks().length > 1,
@@ -881,15 +921,14 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     {
                         id: 'delete-software-stack',
                         text: this.getDeleteActionText(),
-                        disabled: !this.isSelected() || (this.getSelectedSoftwareStack()?.stack_id?.startsWith('base-') ?? false),
+                        disabled: !this.isSelected() || isBaseStack(this.getSelectedSoftwareStack()),
                         onClick: this.deleteSoftwareStack
                     }
                 ]}
                 showPaginator={true}
                 showFilters={true}
                 filterType="select"
-                defaultSortingColumn="name"
-                defaultSortingDescending={false}
+                serverSort={{columns: {created_on: 'created_on'}, defaultColumn: 'created_on', defaultDescending: true}}
                 selectFilters={[
                     {
                         name: '$all',
@@ -979,18 +1018,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     return this.getVirtualDesktopAdminClient().listSoftwareStacks({
                         disabled_also: true,
                         filters: this.getListing().getFilters(),
-                        paginator: this.getListing().getPaginator()
-                    }).catch(error => {
-                        this.props.onFlashbarChange({
-                            items: [
-                                {
-                                    content: error.message,
-                                    type: 'error',
-                                    dismissible: true
-                                }
-                            ]
-                        })
-                        throw error
+                        paginator: this.getListing().getPaginator(),
+                        sort_by: this.getListing().getSortBy()
                     })
                 }}
                 columnDefinitions={VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS}
@@ -1038,8 +1067,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     // Process each stack individually
                     const promises = selectedSoftwareStacks.map(softwareStack => {
                         return this.getVirtualDesktopAdminClient().updateSoftwareStack({
+                            // status only: the controller changes nothing else, so a stale row cannot overwrite the stack
                             software_stack: {
-                                ...softwareStack,
+                                stack_id: softwareStack.stack_id,
+                                base_os: softwareStack.base_os,
                                 enabled: newEnabledState
                             }
                         });
@@ -1055,9 +1086,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                             this.setState({
                                 softwareStackSelected: false
                             }, () => {
-                                setTimeout(() => {
-                                    this.getListing().fetchRecords();
-                                }, 3000); // Wait 3 seconds before refreshing
+                                this.refreshSoon();
                             });
                         })
                         .catch(error => {

@@ -1,4 +1,9 @@
 public: {{ alb_public | lower }}
+# SHA-256 of <cluster home>/<module id>/userdata_customizations.sh (sha256sum of the file).
+# Set, the login node runs its site hook only when the hook matches. Empty, the hook runs as before
+# and the task log warns with the value to set. Recommended; set it again after every edit of the
+# hook, then redeploy the bastion.
+site_hook_sha256: ~
 hostname: "{{module_id}}.{{cluster_name}}.{{aws_region}}.local"
 
 cloudwatch_logs:

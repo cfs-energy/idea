@@ -1295,6 +1295,24 @@ def test_write_back_keeps_a_concurrent_model_id_edit():
     assert dao.db_project['bedrock']['model_ids'] == [MODEL_B]
 
 
+def test_write_back_keeps_a_concurrent_clear_of_every_model():
+    provisioner, _, bedrock, dao = build_provisioner()
+    original_get = bedrock.get_inference_profile
+    state = {'edited': False}
+
+    def get_with_concurrent_clear(inferenceProfileIdentifier):
+        if not state['edited']:
+            state['edited'] = True
+            dao.db_project['bedrock'] = {'enabled': True, 'model_ids': []}
+        return original_get(inferenceProfileIdentifier)
+
+    bedrock.get_inference_profile = get_with_concurrent_clear
+    provisioner.reconcile_project(PROJECT_ID)
+
+    assert state['edited'] is True
+    assert dao.db_project['bedrock']['model_ids'] == []
+
+
 @pytest.mark.parametrize(
     'partition,region,model_id,supported',
     [

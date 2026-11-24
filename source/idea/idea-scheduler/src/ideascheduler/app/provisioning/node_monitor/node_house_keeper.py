@@ -11,6 +11,7 @@
 
 import ideascheduler
 from ideadatamodel import (
+    constants,
     exceptions,
     errorcodes,
     SocaCapacityType,
@@ -21,19 +22,21 @@ from ideadatamodel import (
     ProvisioningStatus,
     EC2Instance,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.aws.ecs_task import current_task_arn
 from ideasdk.utils import Utils
 from ideasdk.metrics import BaseMetrics
 
 from ideascheduler.app.provisioning import JobProvisioningUtil
 from ideascheduler.app.provisioning.lifecycle_events import (
+    REASON_CLASS_CAPACITY,
     REASON_CLASS_CLOUDFORMATION,
     REASON_CLASS_STACK_TIMEOUT,
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
 from typing import Dict, List, Optional, Set, Union, Tuple
-from threading import Thread, Event
+from threading import Event, Lock, Thread
 import arrow
 import logging
 import time
@@ -51,6 +54,73 @@ InfoTuple = Tuple[QueueType, LogInfo]
 # a stack younger than this is still coming up normally: an unfulfilled launch is only
 # worth reporting to the job owner once the stack has had time to produce a node.
 CAPACITY_FAILURE_REASON_MIN_STACK_AGE_SECS = 300
+# written by a compute node that stops its own bootstrap (bootstrap_common.sh fail_bootstrap)
+BOOTSTRAP_STATUS_TAG = 'idea:BootstrapStatus'
+# what the node named with its status (a shared storage stop: the mount directories); the node
+# and its log are deleted within seconds, this tag is what the scheduler can still read
+BOOTSTRAP_DETAIL_TAG = 'idea:BootstrapDetail'
+BOOTSTRAP_INSUFFICIENT_MEMORY = 'insufficient-memory'
+# the statuses the Linux bootstrap writes when a node stops for its FSx for Lustre (owner
+# decision: the job does not run on such a node): an existing or queue-default file system
+# still not mounted after 6 attempts, or a new one that never became available.
+# fsx-mount-failed is this branch's earlier name, accepted too.
+BOOTSTRAP_EXISTING_FSX_UNAVAILABLE = 'existing-fsx-unavailable'
+BOOTSTRAP_SCRATCH_UNAVAILABLE = 'scratch-unavailable'
+BOOTSTRAP_FSX_MOUNT_FAILED = 'fsx-mount-failed'
+# an operator-set checksum for the compute node site hook no longer matches the hook file:
+# every node of the cluster stops until an administrator fixes the setting or the hook
+BOOTSTRAP_SITE_HOOK_MISMATCH = 'site-hook-mismatch'
+# a shared file system configured for the cluster did not mount after 5 attempts (the
+# bootstrap's mount_shared_storage); the node log names the mount directories. like the
+# site hook it hits every job of the cluster, so the job is held at once: a retry
+# launches another node into the same outage
+BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE = 'shared-storage-unavailable'
+# read on the host as <scheduler module id>.compute_node_site_hook_sha256; the module id can
+# differ from the module name, so the full key is built at run time
+SITE_HOOK_SETTING_KEY = 'compute_node_site_hook_sha256'
+# attempts a job gets when its new file system was not ready, whatever the general cap (S3)
+SCRATCH_UNAVAILABLE_MAX_ATTEMPTS = 2
+# the prefix of the error a waiting shared job carries while a node of its stack stopped
+WAITING_PREFIX = 'Waiting: '
+# statuses a node stops with that hold its job at once
+BOOTSTRAP_FSX_STATUSES = (
+    BOOTSTRAP_EXISTING_FSX_UNAVAILABLE,
+    BOOTSTRAP_SCRATCH_UNAVAILABLE,
+    BOOTSTRAP_FSX_MOUNT_FAILED,
+    BOOTSTRAP_SITE_HOOK_MISMATCH,
+    BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE,
+)
+# the stacks whose stop for shared storage the operator log has named, once each
+_shared_storage_reported: set = set()
+# what the owner is told, no commas: qalter splits a resource value on them
+SHARED_STORAGE_REASON = (
+    'a shared file system configured for the cluster could not be mounted on the node. '
+    'An administrator must check that file system and its network access. This is not '
+    'a problem with the job or the image'
+)
+
+
+def shared_storage_reason(directories: str = '') -> str:
+    """the owner's reason, naming the mount directories the node reported when it did"""
+    if not directories:
+        return SHARED_STORAGE_REASON
+    return SHARED_STORAGE_REASON.replace(
+        'could not be mounted on the node.',
+        f'could not be mounted on the node ({directories}).',
+        1,
+    )
+
+
+# the cluster-wide site hook mismatch is logged at error level once per process, not once
+# per job: every job hits it until it is fixed
+_site_hook_mismatch_reported = Event()
+# a job in one of these still has a use for its nodes
+ACTIVE_JOB_STATES = (
+    SocaJobState.QUEUED,
+    SocaJobState.RUNNING,
+    SocaJobState.HELD,
+    SocaJobState.SUBJOB_BEGUN,
+)
 UNAVAILABLE_NODE_STATES = (
     SocaComputeNodeState.DOWN,
     SocaComputeNodeState.UNKNOWN,
@@ -83,7 +153,13 @@ class NodeHouseKeepingSession:
         # pass 6
         self.nodes_to_delete: Set[Union[SocaComputeNode, EC2Instance]] = set()
         self.instances_to_terminate: Set[EC2Instance] = set()
+        # the name each node was set offline under in pass 4, to set it back (B-S6)
+        self.offline_hosts: Dict[str, str] = {}
         self.stacks_to_delete: Set[str] = set()
+        # jobs still waiting to start whose nodes the node-down rule gave up on, and how
+        # long it waited. Their stacks are the job's own sweep's to delete, with the hold
+        # and the count: retry_provisioning_cleanup reads this in the same session.
+        self.jobs_whose_nodes_never_joined: Dict[str, int] = {}
         self.spot_fleet_update_capacities: Dict[str, CapacityTuple] = {}
         self.auto_scaling_group_update_capacities: Dict[str, CapacityTuple] = {}
         self.auto_scaling_group_detach_instances: Dict[str, List[str]] = {}
@@ -264,6 +340,23 @@ class NodeHouseKeepingSession:
             return False
 
         if node.has_state(*UNAVAILABLE_NODE_STATES):
+            job = None
+            if instance.is_soca_ephemeral_capacity:
+                job = self._context.job_cache.get_job(job_id=instance.soca_job_id)
+                if job is None and self._live_in_pbs(instance):
+                    # a cache that missed a queue at start-up does not hold the job: a
+                    # live or unreadable job waits out the time-out below (NM-14)
+                    pass
+                elif job is None or job.state not in ACTIVE_JOB_STATES:
+                    # nothing is coming for this node: its job finished or was deleted.
+                    # Waiting out the timeout only keeps the stack up under no job.
+                    self._logger.info(
+                        f'{self.log_tag(instance)} job {instance.soca_job_id} is '
+                        f'{job.state if job is not None else "gone"} and its node is not '
+                        f'available. adding as candidate for deletion.'
+                    )
+                    return True
+
             # a mom that never reached the server has no state change time: count from launch
             state_changed = node.last_state_changed_time or instance.launch_time
             if state_changed is None:
@@ -280,6 +373,19 @@ class NodeHouseKeepingSession:
                 return False
 
             states = ','.join(sorted(state.value for state in node.states))
+            if self._is_waiting_on_this_node(job=job, instance=instance):
+                # deleting the stack here left the job queued on a stack that was gone:
+                # it was reset and provisioned again with no hold and no count, for as
+                # long as its nodes kept failing to join. The job's own sweep deletes it.
+                self._logger.info(
+                    f'{self.log_tag(instance)} scheduler reported node state {states} for '
+                    f'{unavailable_secs} seconds and job {job.job_id} has not started. '
+                    f'left to the stack timeout of the job.'
+                )
+                self.jobs_whose_nodes_never_joined[job.job_id] = (
+                    unavailable_timeout_secs
+                )
+                return False
             self._logger.info(
                 f'{self.log_tag(instance)} scheduler reported node state {states} for '
                 f'{unavailable_secs} seconds. adding as candidate for deletion.'
@@ -288,11 +394,9 @@ class NodeHouseKeepingSession:
 
         if instance.is_soca_ephemeral_capacity:
             job = self._context.job_cache.get_job(job_id=instance.soca_job_id)
-            if job is not None and job.state in (
-                SocaJobState.QUEUED,
-                SocaJobState.RUNNING,
-                SocaJobState.HELD,
-            ):
+            # an array stays begun from its first subjob's start to its last one's end, and
+            # its nodes sit idle in between: between subjobs, or while the rest wait
+            if job is not None and job.state in ACTIVE_JOB_STATES:
                 self._logger.debug(
                     f'{self.log_tag(instance)} cannot terminate - job {instance.soca_job_id} is {job.state}'
                 )
@@ -302,6 +406,22 @@ class NodeHouseKeepingSession:
                     f'{self.log_tag(instance)} can terminate - job {instance.soca_job_id} is {job.state}'
                 )
             else:
+                # a cache that missed a queue at start-up does not hold the job: PBS is
+                # asked before the node of a live job is reclaimed (NM-14)
+                try:
+                    live = self._context.scheduler.is_job_active(instance.soca_job_id)
+                except Exception as e:
+                    self._logger.warning(
+                        f'{self.log_tag(instance)} cannot terminate - job '
+                        f'{instance.soca_job_id} not in cache and PBS not read: {e}'
+                    )
+                    return False
+                if live:
+                    self._logger.info(
+                        f'{self.log_tag(instance)} cannot terminate - job '
+                        f'{instance.soca_job_id} not in cache but live in PBS'
+                    )
+                    return False
                 self._logger.debug(
                     f'{self.log_tag(instance)} can terminate - job {instance.soca_job_id} not in cache'
                 )
@@ -333,18 +453,20 @@ class NodeHouseKeepingSession:
                     )
                 return False
 
-            pending_jobs = OpenPBSQSelect(
-                context=self._context,
-                logger=self._logger,
-                job_group=node.job_group,
-                job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
-            ).get_count()
+            try:
+                pending_jobs = self._pending_job_ids(node)
+            except Exception as e:
+                # a failed qselect is not "no jobs waiting": the node is kept (NM-16)
+                self._logger.warning(
+                    f'{self.log_tag(instance)} waiting jobs not read, node kept: {e}'
+                )
+                return False
+            pending_jobs = len(pending_jobs)
             if pending_jobs > 0:
                 self._logger.info(
                     f'{self.log_tag(instance)} {pending_jobs} jobs waiting to be executed. skip termination.'
                 )
                 return False
-
             if minutes(seconds=terminate_after_delta_secs) > 5:
                 if minutes(seconds=terminate_after_delta_secs) % 5 == 0:
                     terminate = arrow.utcnow().shift(minutes=terminate_when_idle)
@@ -355,6 +477,18 @@ class NodeHouseKeepingSession:
                     )
 
         return True
+
+    @staticmethod
+    def _is_waiting_on_this_node(job: Optional[SocaJob], instance: EC2Instance) -> bool:
+        """
+        whether the job is queued on the stack this node belongs to. A job that is held, or
+        that was already taken off this stack, is not waiting on the node: it is reclaimed.
+        """
+        if job is None or job.state != SocaJobState.QUEUED or not job.is_provisioned():
+            return False
+        stack_id = job.params.stack_id if job.params is not None else None
+        instance_stack_id = instance.aws_cloudformation_stack_id
+        return not (stack_id and instance_stack_id and stack_id != instance_stack_id)
 
     def _add_candidate_for_deletion(self, instance: EC2Instance):
         if instance.soca_capacity_type == SocaCapacityType.SPOT:
@@ -484,50 +618,6 @@ class NodeHouseKeepingSession:
                 desired=False,
             )
 
-    def pass3_filter_deletion_candidates(self):
-        """
-        filter deletion candidates based on present capacity and required capacity
-
-        For each job group if non-ephemeral capacity, check if the present capacity is less than required capacity
-        for the group.
-        This is to avoid scenarios where, instances are provisioned, become free and terminated as terminate when idle
-        interval is too short.
-        This can happen when capacity is still being provisioned.
-        """
-        for job_group, instances in self.job_groups.items():
-            ref = instances[0]
-            if ref.is_soca_ephemeral_capacity:
-                continue
-
-            required_capacity = self._context.job_cache.get_desired_capacity(
-                job_group=ref.soca_job_group
-            )
-
-            if ref.soca_capacity_type == SocaCapacityType.SPOT:
-                if (
-                    ref.aws_ec2spot_fleet_request_id
-                    not in self.spot_fleet_present_capacities
-                ):
-                    continue
-                present_capacity = self.spot_fleet_present_capacities[
-                    ref.aws_ec2spot_fleet_request_id
-                ]
-                if present_capacity < required_capacity:
-                    del self.spot_fleet_instances[ref.aws_ec2spot_fleet_request_id]
-            else:
-                if (
-                    ref.aws_autoscaling_group_name
-                    not in self.auto_scaling_group_present_capacities
-                ):
-                    continue
-                present_capacity = self.auto_scaling_group_present_capacities[
-                    ref.aws_autoscaling_group_name
-                ]
-                if present_capacity < required_capacity:
-                    del self.auto_scaling_group_instances[
-                        ref.aws_autoscaling_group_name
-                    ]
-
     @staticmethod
     def _registered_host(node: Optional[SocaComputeNode], fallback: str) -> str:
         """
@@ -582,8 +672,13 @@ class NodeHouseKeepingSession:
                 )
                 if node is None:
                     continue
-                if node.has_state(
-                    SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+                # PBS reports a partly used node as free: a job dispatched since the
+                # first pass keeps the node (NM-04)
+                if (
+                    node.has_state(
+                        SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+                    )
+                    or Utils.is_not_empty(node.jobs)
                 ) and not node.has_state(*UNAVAILABLE_NODE_STATES):
                     continue
                 offline_hosts[instance.instance_id] = self._registered_host(
@@ -598,8 +693,13 @@ class NodeHouseKeepingSession:
                 )
                 if node is None:
                     continue
-                if node.has_state(
-                    SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+                # PBS reports a partly used node as free: a job dispatched since the
+                # first pass keeps the node (NM-04)
+                if (
+                    node.has_state(
+                        SocaComputeNodeState.BUSY, SocaComputeNodeState.JOB_BUSY
+                    )
+                    or Utils.is_not_empty(node.jobs)
                 ) and not node.has_state(*UNAVAILABLE_NODE_STATES):
                     continue
                 offline_hosts[instance.instance_id] = self._registered_host(
@@ -607,6 +707,7 @@ class NodeHouseKeepingSession:
                 )
                 nodes_to_set_offline.add(instance)
 
+        self.offline_hosts.update(offline_hosts)
         for instance in nodes_to_set_offline:
             self._logger.info(f'{self.log_tag(instance)} set offline')
             self._context.scheduler.set_node_state(
@@ -668,6 +769,66 @@ class NodeHouseKeepingSession:
                 desired=True,
             )
 
+    def _live_in_pbs(self, instance) -> bool:
+        """the node's job is live in PBS, or PBS cannot say"""
+        try:
+            return bool(self._context.scheduler.is_job_active(instance.soca_job_id))
+        except Exception as e:
+            self._logger.warning(
+                f'{self.log_tag(instance)} job {instance.soca_job_id} not in cache and '
+                f'PBS not read: {e}'
+            )
+            return True
+
+    @staticmethod
+    def _stack_is_shared(provisioning_util) -> bool:
+        try:
+            stack = provisioning_util.stack
+        except Exception:
+            return False
+        keep_forever = getattr(stack, 'soca_keep_forever', False)
+        idle = getattr(stack, 'soca_terminate_when_idle', 0)
+        return keep_forever is True or (isinstance(idle, int) and idle > 0)
+
+    def _pending_job_ids(self, node) -> List[str]:
+        """the group's jobs still waiting to run; a failed qselect raises"""
+        return OpenPBSQSelect(
+            context=self._context,
+            logger=self._logger,
+            job_group=node.job_group,
+            # a begun array still has subjobs to run, and PBS lists it as neither
+            # queued nor held
+            job_state=[
+                SocaJobState.QUEUED,
+                SocaJobState.HELD,
+                SocaJobState.SUBJOB_BEGUN,
+            ],
+        ).list_jobs_ids(raise_on_error=True)
+
+    def _set_back_online(self, instance: EC2Instance):
+        """pass 4 set this kept candidate offline; it is put back to free"""
+        try:
+            # a node registered before the switch to private ipv4 answers to its private
+            # dns name; pass 4 used the registered one
+            self._context.scheduler.set_node_state(
+                host=self.offline_hosts.get(instance.instance_id, instance.node_host),
+                state=SocaComputeNodeState.FREE,
+            )
+        except Exception as e:
+            self._logger.warning(f'{self.log_tag(instance)} not set back online: {e}')
+
+    def _are_all_live_members(self, candidates: List[EC2Instance]) -> bool:
+        """whether the candidates are every pending or running instance of their stack"""
+        stack = candidates[0].soca_compute_stack
+        live = {
+            instance.instance_id
+            for instance in self._context.instance_cache.list_compute_instances(
+                states=['pending', 'running']
+            )
+            if instance.soca_compute_stack == stack
+        }
+        return live <= {instance.instance_id for instance in candidates}
+
     def pass6_finalize_resources_to_delete(self):
         """
         finalize resources to delete
@@ -688,6 +849,19 @@ class NodeHouseKeepingSession:
             ref = instances[0]
 
             current_capacity, desired_capacity = capacity
+
+            if desired_capacity == 0 and not self._are_all_live_members(instances):
+                # weighted members can bring the target to 0 while a busy member is
+                # left; deleting the stack would end its job (NM-06). nothing is scaled
+                # in this pass; the group is looked at again on the next.
+                self._logger.info(
+                    f'{self.log_tag(ref)} target reaches 0 with other members live; '
+                    f'stack {ref.soca_compute_stack} kept'
+                )
+                for instance in instances:
+                    self.instances_to_terminate.discard(instance)
+                    self._set_back_online(instance)
+                continue
 
             if desired_capacity == 0:
                 self.stack_info[ref.soca_compute_stack] = (
@@ -719,6 +893,19 @@ class NodeHouseKeepingSession:
             ref = instances[0]
 
             current_capacity, desired_capacity = capacity
+
+            if desired_capacity == 0 and not self._are_all_live_members(instances):
+                # weighted members can bring the target to 0 while a busy member is
+                # left; deleting the stack would end its job (NM-06). nothing is scaled
+                # in this pass; the group is looked at again on the next.
+                self._logger.info(
+                    f'{self.log_tag(ref)} target reaches 0 with other members live; '
+                    f'stack {ref.soca_compute_stack} kept'
+                )
+                for instance in instances:
+                    self.instances_to_terminate.discard(instance)
+                    self._set_back_online(instance)
+                continue
 
             if desired_capacity == 0:
                 self.stack_info[ref.soca_compute_stack] = (
@@ -971,6 +1158,16 @@ class NodeHouseKeepingSession:
         ) in self.spot_fleet_update_capacities.items():
             current_capacity, target_capacity = capacity
             queue_type, info = self.spot_fleet_info[spot_fleet_request_id]
+            # the provisioner may have raised the target since it was read: remove only
+            # the weight terminated here from the target as it is now (NM-08)
+            fresh = self.aws_util.ec2_describe_spot_fleet_request(
+                spot_fleet_request_id=spot_fleet_request_id
+            )
+            if fresh is not None:
+                target_capacity = max(
+                    0, fresh.target_capacity - (current_capacity - target_capacity)
+                )
+                current_capacity = fresh.target_capacity
             self._logger.info(
                 f'{info} updating capacity: {current_capacity} -> {target_capacity}'
             )
@@ -999,6 +1196,14 @@ class NodeHouseKeepingSession:
         ) in self.auto_scaling_group_update_capacities.items():
             current_capacity, desired_capacity = capacity
             queue_type, info = self.auto_scaling_group_info[auto_scaling_group_name]
+            fresh = self.aws_util.autoscaling_describe_auto_scaling_group(
+                auto_scaling_group_name=auto_scaling_group_name
+            )
+            if fresh is not None:
+                desired_capacity = max(
+                    0, fresh.desired_capacity - (current_capacity - desired_capacity)
+                )
+                current_capacity = fresh.desired_capacity
             self._logger.info(
                 f'{info} updating capacity: {current_capacity} -> {desired_capacity}'
             )
@@ -1080,22 +1285,379 @@ class NodeHouseKeepingSession:
                 attempt_number=lifecycle_events.attempts_consumed(job=job),
             )
 
-    def _hold_after_stack_timeout(self, job: SocaJob, timeout_secs: int):
+    def _instance_type_too_small(self, job: SocaJob) -> Optional[str]:
+        """
+        the instance type of a node of this job that stopped its own bootstrap for lack of
+        memory, or None. The node says so in a tag, and it will never join the scheduler.
+        Read from the instance cache, which already describes every instance; a node of an
+        earlier stack of the same job is not this attempt's.
+        """
+        return self._node_that_stopped_bootstrap(job, BOOTSTRAP_INSUFFICIENT_MEMORY)
+
+    def _node_that_stopped_bootstrap(self, job: SocaJob, status: str) -> Optional[str]:
+        """the instance type of a node of this attempt that stopped with status, or None"""
+        try:
+            stack_id = job.params.stack_id if job.params is not None else None
+            for instance in self._context.instance_cache.list_compute_instances(
+                job_id=job.job_id, states=['pending', 'running']
+            ):
+                if instance.get_tag(BOOTSTRAP_STATUS_TAG) != status:
+                    continue
+                instance_stack_id = instance.aws_cloudformation_stack_id
+                if instance_stack_id and stack_id and instance_stack_id != stack_id:
+                    continue
+                return instance.instance_type or 'unknown'
+        except Exception as e:
+            # the timeout still catches the job; only the earlier and plainer hold is lost
+            self._logger.warning(
+                f'{job.log_tag} bootstrap status of its nodes could not be read: {e}'
+            )
+        return None
+
+    def _timed_out_stack_reason(
+        self, job: SocaJob, timeout_secs: int, provisioning_util: JobProvisioningUtil
+    ) -> Tuple[Optional[str], str, int]:
+        """
+        why a stack past the timeout has not started its job, and how many of its instances
+        are up. The hold is for a node that launched and never joined the scheduler (a bad
+        instance_ami or bootstrap), which a retry repeats. A spot fleet is CREATE_COMPLETE
+        once its request is active, with fewer instances than it asked for while spot
+        capacity is short, or none, and the ones it got join and sit free: a capacity wait,
+        retried and counted.
+
+        An instance younger than node_unavailable_timeout_seconds has not yet had the time
+        any node gets to join, so it is no evidence: late spot capacity is one. While the
+        stack is less than that past its own timeout, the reason class is None and the
+        stack is left for a later sweep, by when the instance has joined or is old enough
+        to hold for. After that any instance that has not joined holds the job, whatever its
+        age: a group that keeps replacing an instance that fails its status checks always
+        has a young one, and must not keep its stack waiting or be retried as capacity.
+        """
+        launched = 0
+        try:
+            node_timeout_secs = self.config.get_int(
+                'scheduler.job_provisioning.node_unavailable_timeout_seconds',
+                default=1800,
+            )
+            now = arrow.utcnow()
+            stack_id = job.params.stack_id if job.params is not None else None
+            instances = [
+                instance
+                for instance in self._context.instance_cache.list_compute_instances(
+                    job_id=job.job_id, states=['pending', 'running']
+                )
+                if not (
+                    instance.aws_cloudformation_stack_id
+                    and stack_id
+                    and instance.aws_cloudformation_stack_id != stack_id
+                )
+            ]
+            launched = len(instances)
+            if launched > 0:
+                nodes = {
+                    node.instance_id: node
+                    for node in self._context.scheduler.list_nodes()
+                    if node.instance_id
+                }
+                young = False
+                hold = (
+                    REASON_CLASS_STACK_TIMEOUT,
+                    f'stack created but job did not start within {timeout_secs}s',
+                    launched,
+                )
+                for instance in instances:
+                    node = nodes.get(instance.instance_id)
+                    if node is not None and not node.has_state(
+                        *UNAVAILABLE_NODE_STATES
+                    ):
+                        continue
+                    if (
+                        instance.launch_time is not None
+                        and (now - instance.launch_time).total_seconds()
+                        < node_timeout_secs
+                    ):
+                        young = True
+                        continue
+                    return hold
+                if young:
+                    stack_created = provisioning_util.stack.creation_time
+                    if (
+                        stack_created is not None
+                        and (now - stack_created).total_seconds()
+                        < timeout_secs + node_timeout_secs
+                    ):
+                        return (
+                            None,
+                            'an instance launched late is still joining',
+                            launched,
+                        )
+                    return hold
+        except Exception as e:
+            # no evidence of a node that never joined: retried and counted, not held
+            self._logger.warning(
+                f'{job.log_tag} nodes of its stack could not be read: {e}'
+            )
+        return (
+            REASON_CLASS_CAPACITY,
+            f'only {launched} instances launched within {timeout_secs}s'
+            if launched
+            else f'no instance launched within {timeout_secs}s',
+            launched,
+        )
+
+    def site_hook_setting(self) -> str:
+        module_id = self._context.module_id() or constants.MODULE_SCHEDULER
+        return f'{module_id}.{SITE_HOOK_SETTING_KEY}'
+
+    def bootstrap_stop_reason(self, job: SocaJob, status: str) -> str:
+        """the owner-readable reason a node of this job stopped its bootstrap, no commas"""
+        if status == BOOTSTRAP_SITE_HOOK_MISMATCH:
+            return (
+                f'the compute node site hook does not match its checksum setting '
+                f'{self.site_hook_setting()}. An administrator must update the setting or the '
+                f'hook file'
+            )
+        if status == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
+            return shared_storage_reason(self._stopped_node_detail(job, status))
+        if status == BOOTSTRAP_SCRATCH_UNAVAILABLE:
+            return (
+                f'the new FSx for Lustre file system made for this job in stack '
+                f'{job.get_compute_stack()} did not become available in time'
+            )
+        fsx = job.params.fsx_lustre.existing_fsx if job.params.fsx_lustre else None
+        return (
+            f'a node could not mount the FSx for Lustre file system '
+            f'{fsx or "the job names"} after 6 attempts. Check that it exists and that '
+            f'the cluster subnets reach it'
+        )
+
+    def _waiting_reason(self, job: SocaJob) -> str:
+        """': <reason>' when a shared stack's node stopped its bootstrap while the job
+        waited: the stack is gone by the time the attempt is charged, and the hold text
+        must still name the cause (S5)"""
+        try:
+            stored = self._context.job_cache.get_job(job.job_id)
+        except Exception:
+            return ''
+        message = stored.error_message if stored else None
+        if not message or not message.startswith(WAITING_PREFIX):
+            return ''
+        return ': ' + message[len(WAITING_PREFIX) :].rstrip('.')
+
+    def _report_site_hook_mismatch(self, job: SocaJob):
+        if _site_hook_mismatch_reported.is_set():
+            return
+        _site_hook_mismatch_reported.set()
+        self._logger.error(
+            f'compute nodes stop their bootstrap: the site hook does not match '
+            f'{self.site_hook_setting()}. Every job is held until an administrator updates the '
+            f'setting or the hook file (first seen on job {job.job_id}, stack '
+            f'{job.get_compute_stack()}).'
+        )
+
+    def _report_cluster_stop(self, job: SocaJob, status: Optional[str]):
+        """the operator log hears of a stop that is the cluster's, not the job's"""
+        if status == BOOTSTRAP_SITE_HOOK_MISMATCH:
+            self._report_site_hook_mismatch(job)
+        elif status == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
+            stack = job.get_compute_stack()
+            if stack in _shared_storage_reported:
+                return
+            _shared_storage_reported.add(stack)
+            directories = (
+                self._stopped_node_detail(job, status) or 'not reported by the node'
+            )
+            self._logger.error(
+                f'a compute node of stack {stack} stopped its bootstrap: a shared file '
+                f'system configured for the cluster did not mount (mount directories: '
+                f'{directories}). Jobs are held until an administrator restores that file '
+                f'system or its network access (job {job.job_id}).'
+            )
+
+    def _stopped_node_detail(self, job: SocaJob, status: str) -> str:
+        """the detail a node of this job or its stack tagged with status, commas dropped
+        (qalter), or ''"""
+        stack = job.get_compute_stack()
+        try:
+            for instance in self._context.instance_cache.list_compute_instances(
+                states=['pending', 'running']
+            ):
+                if instance.get_tag(BOOTSTRAP_STATUS_TAG) != status:
+                    continue
+                if instance.soca_job_id != job.job_id and (
+                    not stack or instance.soca_compute_stack != stack
+                ):
+                    continue
+                detail = instance.get_tag(BOOTSTRAP_DETAIL_TAG) or ''
+                return ' '.join(detail.replace(',', ' ').split())
+        except Exception as e:
+            self._logger.warning(f'{job.log_tag} bootstrap detail not read: {e}')
+        return ''
+
+    def _stack_bootstrap_status(self, job: SocaJob) -> Optional[str]:
+        """a stop status a node of the job's stack reported, read by stack (shared nodes
+        carry the id of the job they were made for)"""
+        stack = job.get_compute_stack()
+        try:
+            for instance in self._context.instance_cache.list_compute_instances(
+                states=['pending', 'running']
+            ):
+                if instance.soca_compute_stack != stack:
+                    continue
+                status = instance.get_tag(BOOTSTRAP_STATUS_TAG)
+                if status in BOOTSTRAP_FSX_STATUSES:
+                    return status
+        except Exception as e:
+            self._logger.warning(f'{job.log_tag} bootstrap status not read: {e}')
+        return None
+
+    def _hold_after_stack_timeout(
+        self,
+        job: SocaJob,
+        timeout_secs: int,
+        too_small: Optional[str] = None,
+        fsx_unavailable: Optional[str] = None,
+    ):
         scheduler = self._context.scheduler
+        # no commas in either text: qalter splits a resource value on them
+        if fsx_unavailable == BOOTSTRAP_SITE_HOOK_MISMATCH:
+            message = (
+                f'Job held: the compute node site hook does not match its checksum '
+                f'setting {self.site_hook_setting()}. An administrator must update the setting '
+                f'or the hook file. qrls {job.job_id} to retry after that.'
+            )
+            comment = (
+                f'IDEA: held. The compute node site hook does not match its checksum '
+                f'setting. qrls {job.job_id} to retry'
+            )
+        elif fsx_unavailable == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
+            message = (
+                f'Job held: {shared_storage_reason(self._stopped_node_detail(job, fsx_unavailable))}. '
+                f'qrls {job.job_id} to retry after that.'
+            )
+            comment = (
+                f'IDEA: held. Shared cluster storage did not mount on its node. '
+                f'qrls {job.job_id} to retry'
+            )
+        elif fsx_unavailable == BOOTSTRAP_SCRATCH_UNAVAILABLE:
+            message = (
+                f'Job held: the new FSx for Lustre file system made for this job in '
+                f'stack {job.get_compute_stack()} never became available. It is deleted '
+                f'with the stack. qrls {job.job_id} to retry.'
+            )
+            comment = (
+                f'IDEA: held. Its new FSx for Lustre never became available. '
+                f'qrls {job.job_id} to retry'
+            )
+        elif fsx_unavailable:
+            fsx = job.params.fsx_lustre.existing_fsx if job.params.fsx_lustre else None
+            message = (
+                f'Job held: a node could not mount the FSx for Lustre file system '
+                f'{fsx or "the job names"} after 6 attempts. Check that it exists and '
+                f'that the cluster subnets reach it. qrls {job.job_id} to retry.'
+            )
+            # the comment is short (PBS caps it): the file system id, not its DNS name
+            comment = (
+                f'IDEA: held. A node could not mount FSx for Lustre '
+                f'{(fsx or "").split(".")[0]}. qrls {job.job_id} to retry'
+            )
+        elif too_small:
+            message = (
+                f'Job held: instance type {too_small} is too small to set up a compute '
+                f'node on this image (it needs 2 GiB of memory). Use a larger instance '
+                f'type or an image built for this release. qrls {job.job_id} to retry.'
+            )
+            comment = (
+                f'IDEA: held. Instance type {too_small} is too small to set up a '
+                f'compute node. qrls {job.job_id} to retry'
+            )
+        else:
+            message = (
+                f'Job held: nodes launched but the job did not start in '
+                f'{max(1, timeout_secs // 60)} min. Check instance_ami. '
+                f'qrls {job.job_id} to retry.'
+            )
+            comment = (
+                f'IDEA: held. Nodes launched but the job did not start in '
+                f'{max(1, timeout_secs // 60)} min (check instance_ami). '
+                f'qrls {job.job_id} to retry'
+            )
         try:
             scheduler.hold_job(job_id=job.job_id)
-            scheduler.set_job_comment(
+            # on record, so a later qdel reads as the platform's hold and not the owner's
+            self._context.job_cache.set_job_provisioning_error(
                 job_id=job.job_id,
-                comment=(
-                    f'IDEA: held. Nodes launched but the job did not start in '
-                    f'{max(1, timeout_secs // 60)} min (check instance_ami). '
-                    f'qrls {job.job_id} to retry'
-                ),
+                error_code=errorcodes.JOB_HELD_STACK_TIMEOUT,
+                message=message,
             )
+            scheduler.set_job_comment(job_id=job.job_id, comment=comment)
         except Exception as e:
             self._logger.warning(
                 f'{job.log_tag} failed to hold after stack timeout: {e}'
             )
+
+    def _not_started(self, job: SocaJob) -> bool:
+        """
+        whether PBS itself says the job has not started. The sweep below works from the job
+        cache, and a row can read queued for a job that runs: its run event was lost, or the
+        cache was restored from an older copy. A stack is only deleted under a job PBS has
+        queued, held or waiting, and for an array only if every subjob reads the same; any
+        other answer, or none, leaves the stack alone, and what PBS said is written to the
+        cache so the next sweep reads it there.
+        """
+        try:
+            live_job = self._context.scheduler.get_job(job_id=job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} job state could not be read; stack left in place: {e}'
+            )
+            return False
+        if live_job is None:
+            self._logger.info(f'{job.log_tag} job is gone; stack left in place')
+            return False
+        waiting = (SocaJobState.QUEUED, SocaJobState.HELD, SocaJobState.WAITING)
+        if live_job.state not in waiting:
+            self._logger.info(
+                f'{job.log_tag} job is {live_job.state} in the scheduler; stack left in place'
+            )
+            self._context.job_cache.sync(jobs=[live_job])
+            return False
+        if not ModelUtils.is_array_job_id(job.job_id):
+            return True
+
+        # an array's own state is not proof that none of its subjobs runs: what PBS reports
+        # for a begun array that is held and released has not been seen. Every index it was
+        # submitted with has to read as not started, and anything short of that keeps the
+        # stack. Not started is queued, held or waiting, or done with no start time: a
+        # subjob deleted while queued never ran, and must not cost an array that never got
+        # its nodes the retry. One that ran keeps its start time when it is done.
+        try:
+            submitted, subjobs = self._context.scheduler.get_array_subjobs(job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} subjobs could not be read; stack left in place: {e}'
+            )
+            return False
+        done = (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+        if any(
+            subjob.state not in waiting
+            and not (subjob.state in done and subjob.start_time is None)
+            for subjob in subjobs
+        ):
+            self._logger.info(
+                f'{job.log_tag} array is {live_job.state} in the scheduler with a subjob '
+                f'begun; stack left in place'
+            )
+            self._context.job_cache.sync(
+                jobs=[live_job.model_copy(update={'state': SocaJobState.SUBJOB_BEGUN})]
+            )
+            return False
+        if submitted is None or len(subjobs) < submitted:
+            self._logger.warning(
+                f'{job.log_tag} {len(subjobs)} of {submitted} subjobs read; stack left in place'
+            )
+            return False
+        return True
 
     def retry_provisioning_cleanup(self):
         """
@@ -1142,7 +1704,19 @@ class NodeHouseKeepingSession:
                     self._logger.debug(
                         f'{job.log_tag} Job is HELD, fetching latest state from scheduler'
                     )
-                    job = self._context.scheduler.get_job(job_id=job.job_id)
+                    try:
+                        live_job = self._context.scheduler.get_job(job_id=job.job_id)
+                    except exceptions.SocaException as e:
+                        if e.error_code != errorcodes.SCHEDULER_JOB_FINISHED:
+                            raise
+                        live_job = None
+                    if live_job is None:
+                        # deleted while held. its record is the finished job processor's
+                        self._logger.debug(
+                            f'{job.log_tag} held job is gone from the scheduler, skipping'
+                        )
+                        continue
+                    job = live_job
                     if job.state == SocaJobState.HELD:
                         self._logger.debug(
                             f'{job.log_tag} Job still HELD after refresh, skipping'
@@ -1151,8 +1725,13 @@ class NodeHouseKeepingSession:
                     self._logger.info(
                         f'queue previously held job: {job.log_tag}, state: {job.state}'
                     )
-                    # a released job gets a fresh provisioning retry budget
+                    # a released job gets a fresh provisioning retry budget, and the
+                    # reason it was held is no longer its reason: left on the job, a later
+                    # qdel by its owner is recorded as the platform's hold
                     self._context.job_cache.clear_job_provisioning_retries(
+                        job_id=job.job_id
+                    )
+                    self._context.job_cache.clear_job_provisioning_error(
                         job_id=job.job_id
                     )
                     self._context.job_monitor.job_modified(job=job)
@@ -1232,10 +1811,23 @@ class NodeHouseKeepingSession:
                         )
                     continue
 
+                # the job is rebuilt from the queue's current settings; a queue changed
+                # from shared to single-job still has jobs on its shared stack, which the
+                # stack's own tags say (NM-02)
                 if (
-                    job.is_shared_capacity()
-                    and provisioning_status == ProvisioningStatus.COMPLETED
-                ):
+                    job.is_shared_capacity() or self._stack_is_shared(provisioning_util)
+                ) and provisioning_status == ProvisioningStatus.COMPLETED:
+                    # the stack is shared and left alone, but a node of it that stopped its
+                    # bootstrap says why: the owner and the operator log hear it (B-S4).
+                    # the node is retired by the node-down rule and the attempt counted
+                    status = self._stack_bootstrap_status(job)
+                    if status is not None:
+                        self._report_cluster_stop(job, status)
+                        self._context.job_cache.set_job_provisioning_error(
+                            job_id=job.job_id,
+                            error_code=errorcodes.GENERAL_ERROR,
+                            message=f'{WAITING_PREFIX}{self.bootstrap_stop_reason(job, status)}.',
+                        )
                     self._logger.debug(
                         f'{job.log_tag} Shared capacity job with completed stack, skipping cleanup'
                     )
@@ -1243,11 +1835,71 @@ class NodeHouseKeepingSession:
 
                 delete_stack = False
                 stack_failure_reason_class = None
+                too_small = None
+                fsx_unavailable = None
+                retry_scratch = False
+                hold_timeout_secs = stack_provisioning_timeout_secs
+                launched = 0
                 self._logger.debug(
                     f'{job.log_tag} Evaluating cleanup actions for provisioning status: {provisioning_status}'
                 )
 
-                if provisioning_status == ProvisioningStatus.COMPLETED:
+                if provisioning_status in (
+                    ProvisioningStatus.COMPLETED,
+                    ProvisioningStatus.TIMEOUT,
+                ):
+                    too_small = self._instance_type_too_small(job)
+                    fsx_unavailable = next(
+                        (
+                            status
+                            for status in BOOTSTRAP_FSX_STATUSES
+                            if self._node_that_stopped_bootstrap(job, status)
+                            is not None
+                        ),
+                        None,
+                    )
+
+                self._report_cluster_stop(job, fsx_unavailable)
+
+                if fsx_unavailable:
+                    # the node will not run the job: hold at once with the reason rather
+                    # than wait out the time-out and retry
+                    self._logger.info(
+                        f'{job.log_tag} a node of ComputeStack: {job.get_compute_stack()} '
+                        f'reported {fsx_unavailable}, marking for deletion'
+                    )
+                    delete_stack = True
+                    stack_failure_message = f'a node stopped: {fsx_unavailable}'
+                    # a new file system can be slow to create; holding at once made a slow
+                    # create a hold on every qrls (B-S5): that one is retried, but within
+                    # its own bound whatever max_provisioning_retries says, 0 included;
+                    # each attempt builds a file system and a fleet (S3)
+                    retry_scratch = (
+                        fsx_unavailable == BOOTSTRAP_SCRATCH_UNAVAILABLE
+                        and self._context.job_cache.get_job_provisioning_retry_count(
+                            job.job_id
+                        )
+                        + 1
+                        < SCRATCH_UNAVAILABLE_MAX_ATTEMPTS
+                    )
+                    stack_failure_reason_class = (
+                        REASON_CLASS_CLOUDFORMATION
+                        if retry_scratch
+                        else REASON_CLASS_STACK_TIMEOUT
+                    )
+
+                elif too_small:
+                    # the node gave up on its own bootstrap and said why. waiting out the
+                    # timeout tells the owner nothing and a retry launches the same node.
+                    self._logger.info(
+                        f'{job.log_tag} a node of ComputeStack: {job.get_compute_stack()} '
+                        f'reported {BOOTSTRAP_INSUFFICIENT_MEMORY} ({too_small}), marking for deletion'
+                    )
+                    delete_stack = True
+                    stack_failure_reason_class = REASON_CLASS_STACK_TIMEOUT
+                    stack_failure_message = f'instance type {too_small} is too small to set up a compute node'
+
+                elif provisioning_status == ProvisioningStatus.COMPLETED:
                     self._logger.debug(
                         f'{job.log_tag} Stack completed successfully, checking timeout'
                     )
@@ -1264,7 +1916,25 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Stack age: {delta_secs} seconds, timeout threshold: {stack_provisioning_timeout_secs} seconds'
                     )
 
-                    if delta_secs < stack_provisioning_timeout_secs:
+                    never_joined_secs = self.jobs_whose_nodes_never_joined.get(
+                        job.job_id
+                    )
+                    if never_joined_secs is not None:
+                        # the node-down rule got there first and left the stack to this
+                        # sweep, so that the job is held and the attempt counted here
+                        self._logger.info(
+                            f'{job.log_tag} nodes of ComputeStack: {job.get_compute_stack()} '
+                            f'did not join within {never_joined_secs}s, marking for deletion'
+                        )
+                        delete_stack = True
+                        stack_failure_reason_class = REASON_CLASS_STACK_TIMEOUT
+                        stack_failure_message = (
+                            f'nodes launched but did not join the scheduler within '
+                            f'{never_joined_secs}s'
+                        )
+                        hold_timeout_secs = never_joined_secs
+
+                    elif delta_secs < stack_provisioning_timeout_secs:
                         # print log message only after 5 mins have elapsed.
                         if minutes(seconds=delta_secs) % 5 == 0:
                             timeout_in_secs = (
@@ -1280,26 +1950,49 @@ class NodeHouseKeepingSession:
                         )
                         continue
 
+                    else:
+                        self._logger.info(
+                            f'{job.log_tag} Stack has timed out ({delta_secs}s > {stack_provisioning_timeout_secs}s), marking for deletion'
+                        )
+                        delete_stack = True
+                        stack_failure_reason_class, stack_failure_message, launched = (
+                            self._timed_out_stack_reason(
+                                job, stack_provisioning_timeout_secs, provisioning_util
+                            )
+                        )
+
+                elif provisioning_status == ProvisioningStatus.TIMEOUT:
+                    # check_status reports a created stack past the timeout as TIMEOUT and
+                    # never as COMPLETED, so this is where a stack whose nodes launched
+                    # and never ran the job arrives, and a spot fleet that launched too few.
+                    # It is not a failed create.
                     self._logger.info(
-                        f'{job.log_tag} Stack has timed out ({delta_secs}s > {stack_provisioning_timeout_secs}s), marking for deletion'
+                        f'{job.log_tag} Stack was created but the job did not start within '
+                        f'{stack_provisioning_timeout_secs}s, marking for deletion'
                     )
                     delete_stack = True
-                    stack_failure_reason_class = REASON_CLASS_STACK_TIMEOUT
-                    stack_failure_message = (
-                        f'stack created but job did not start within '
-                        f'{stack_provisioning_timeout_secs}s'
+                    stack_failure_reason_class, stack_failure_message, launched = (
+                        self._timed_out_stack_reason(
+                            job, stack_provisioning_timeout_secs, provisioning_util
+                        )
                     )
 
-                elif provisioning_status in (
-                    ProvisioningStatus.FAILED,
-                    ProvisioningStatus.TIMEOUT,
-                ):
+                elif provisioning_status == ProvisioningStatus.FAILED:
                     self._logger.info(
-                        f'{job.log_tag} Stack provisioning failed or timed out (status: {provisioning_status}), marking for deletion'
+                        f'{job.log_tag} Stack provisioning failed (status: {provisioning_status}), marking for deletion'
                     )
                     delete_stack = True
                     stack_failure_reason_class = REASON_CLASS_CLOUDFORMATION
                     stack_failure_message = f'ProvisioningStatus: {provisioning_status}'
+
+                if delete_stack and stack_failure_reason_class is None:
+                    self._logger.info(
+                        f'{job.log_tag} {stack_failure_message}; stack left in place'
+                    )
+                    continue
+
+                if delete_stack and not self._not_started(job):
+                    continue
 
                 if delete_stack:
                     stack_name = job.get_compute_stack()
@@ -1307,6 +2000,20 @@ class NodeHouseKeepingSession:
                     self._logger.info(
                         f'{job.log_tag} Deleting ComputeStack: {stack_name}, Retry provisioning ...'
                     )
+
+                    try:
+                        self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
+                        self._logger.info(
+                            f'{job.log_tag} Successfully initiated stack deletion for: {stack_name}'
+                        )
+                    except Exception as stack_delete_error:
+                        # the job keeps its stack and the next pass deletes it again; a
+                        # reset now would provision a second stack beside the old one
+                        self._logger.error(
+                            f'{job.log_tag} Failed to delete stack {stack_name}, '
+                            f'the next pass tries again: {stack_delete_error}'
+                        )
+                        continue
 
                     lifecycle_events = self._context.lifecycle_events
                     if lifecycle_events is not None:
@@ -1317,17 +2024,6 @@ class NodeHouseKeepingSession:
                             reason_class=stack_failure_reason_class,
                             attempt_number=lifecycle_events.attempts_consumed(job=job),
                         )
-
-                    try:
-                        self.aws_util.cloudformation_delete_stack(stack_name=stack_name)
-                        self._logger.info(
-                            f'{job.log_tag} Successfully initiated stack deletion for: {stack_name}'
-                        )
-                    except Exception as stack_delete_error:
-                        self._logger.error(
-                            f'{job.log_tag} Failed to delete stack {stack_name}: {stack_delete_error}'
-                        )
-                        # Continue with job reset even if stack deletion fails
                 else:
                     self._logger.debug(f'{job.log_tag} No stack deletion required')
 
@@ -1342,20 +2038,69 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Failed to reset job in scheduler: {reset_error}'
                     )
                     raise  # Re-raise to trigger the outer exception handler
+                # the job holds no capacity now. its license count is recorded again when
+                # it is next provisioned; left in place it would count against that retry
+                # and against every other job asking for the license.
+                self._context.job_cache.release_active_licenses(job.job_id)
 
                 if stack_failure_reason_class == REASON_CLASS_STACK_TIMEOUT:
                     # nodes launched but the job never started on them, usually a node that
                     # never joined the scheduler (a bad instance_ami or bootstrap). a silent
                     # retry repeats it, so the job is held and its owner told why.
                     self._hold_after_stack_timeout(
-                        job=job, timeout_secs=stack_provisioning_timeout_secs
+                        job=job,
+                        timeout_secs=hold_timeout_secs,
+                        too_small=too_small,
+                        fsx_unavailable=fsx_unavailable,
+                    )
+                elif fsx_unavailable == BOOTSTRAP_SCRATCH_UNAVAILABLE:
+                    self._context.job_cache.set_job_provisioning_error(
+                        job_id=job.job_id,
+                        error_code=errorcodes.GENERAL_ERROR,
+                        message=f'{self.bootstrap_stop_reason(job, fsx_unavailable)}. '
+                        f'The stack is deleted and the job retried.',
+                    )
+                elif stack_failure_reason_class == REASON_CLASS_CAPACITY:
+                    # no commas: qalter splits a resource value on them
+                    self._context.job_cache.set_job_provisioning_error(
+                        job_id=job.job_id,
+                        error_code=errorcodes.CAPACITY_UNAVAILABLE,
+                        message=(
+                            (
+                                'Not every node of this job could be launched'
+                                if launched
+                                else 'No instance could be launched for this job'
+                            )
+                            + f' in {max(1, stack_provisioning_timeout_secs // 60)} min'
+                            ' (no capacity for its instance types). Retrying.'
+                        ),
                     )
 
-                if delete_stack:
+                # a stack that went from under a queued job is an attempt too, whoever
+                # deleted it: no path may provision the job again uncounted. this now
+                # includes a shared stack (NM-13, owner option a): a shared node that
+                # never joined is retired after 30 minutes and its stack goes, and the
+                # job was provisioned again every 30 minutes without end. a stack retired
+                # as idle has no queued job bound to it, so it costs nothing.
+                stack_gone = provisioning_status == ProvisioningStatus.NOT_PROVISIONED
+                if delete_stack or stack_gone:
                     retries_exhausted = provisioning_util.track_provisioning_failure(
                         job=job,
-                        message=f'CloudFormation stack {job.get_compute_stack()} provisioning '
-                        f'failed or timed out (status: {provisioning_status}).',
+                        message=f'CloudFormation stack {job.get_compute_stack()} '
+                        + (
+                            'was deleted before the job started'
+                            + self._waiting_reason(job)
+                            + '.'
+                            if stack_gone
+                            else 'was deleted: '
+                            + self.bootstrap_stop_reason(job, fsx_unavailable)
+                            + ('. Retrying.' if retry_scratch else '.')
+                            if fsx_unavailable == BOOTSTRAP_SCRATCH_UNAVAILABLE
+                            else f'launched {"too few instances" if launched else "no instance"} '
+                            '(no capacity for its instance types).'
+                            if stack_failure_reason_class == REASON_CLASS_CAPACITY
+                            else f'provisioning failed or timed out (status: {provisioning_status}).'
+                        ),
                         # the next provisioning cycle sees this same failure while
                         # cloudformation deletes the stack; naming it costs one retry
                         # rather than one per sighting.
@@ -1377,10 +2122,15 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Failed to notify job monitor: {monitor_error}'
                     )
 
-                self._logger.warning(
-                    f'{job.log_tag} CloudFormation Stack provisioning failed or timed-out. '
-                    f'Job provisioning will be re-tried.'
-                )
+                if stack_failure_reason_class == REASON_CLASS_STACK_TIMEOUT:
+                    self._logger.warning(
+                        f'{job.log_tag} nodes launched but the job did not start. Job held.'
+                    )
+                else:
+                    self._logger.warning(
+                        f'{job.log_tag} CloudFormation Stack provisioning failed or timed-out. '
+                        f'Job provisioning will be re-tried.'
+                    )
             except Exception as e:
                 job_tag = job.log_tag if job else 'Unknown Job'
                 self._logger.exception(
@@ -1539,6 +2289,7 @@ class NodeHouseKeeper:
         self._logger = self._context.logger(name='node_housekeeper')
         self._is_running = Event()
         self._house_keeping_thread: Optional[Thread] = None
+        self._invoke_lock = Lock()
 
     def do_job(self):
         session = NodeHouseKeepingSession(context=self._context, logger=self._logger)
@@ -1550,24 +2301,20 @@ class NodeHouseKeeper:
             self._logger.warning('job provisioning not ready. skip.')
             return
 
-        # allow only one instance of housekeeper to run at any given time.
-        if self._is_running.is_set():
-            return
-
-        try:
-            self._is_running.set()
-
+        # allow only one instance of housekeeper to run at any given time: the flag was
+        # cleared as soon as the thread started, so a sweep longer than the interval ran
+        # beside the next one (NM-07). the thread itself is the running state.
+        with self._invoke_lock:
+            thread = self._house_keeping_thread
+            if thread is not None and thread.is_alive():
+                return
             self._house_keeping_thread = Thread(
                 name='node-housekeeper', target=self.do_job
             )
             self._house_keeping_thread.start()
 
-        finally:
-            self._is_running.clear()
-
     def stop(self):
-        if not self._is_running.is_set():
+        thread = self._house_keeping_thread
+        if thread is None or not thread.is_alive():
             return
-        if self._house_keeping_thread is None:
-            return
-        self._house_keeping_thread.join()
+        thread.join()

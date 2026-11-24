@@ -28,8 +28,8 @@ from ideasdk.aws.stock_amis import (
     find_latest_image,
     get_ami_pattern_for_stack,
     stack_architecture,
-    stock_unsupported_reason,
 )
+from ideasdk.aws.image_builds import partition_unavailable_reason
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.events.events_utils import EventsUtils
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
@@ -100,11 +100,11 @@ class VirtualDesktopSoftwareStackUtils:
                         continue
                     parts = stack_id[len('ss-base-') :].split('-')
                     ami_type = parts[0] if len(parts) >= 2 else None
-                    unsupported = stock_unsupported_reason(
+                    unsupported = partition_unavailable_reason(
                         ami_type, ec2_client.meta.region_name
                     )
                     if unsupported:
-                        result.status = 'error'
+                        result.status = 'unsupported'
                         result.message = unsupported
                         continue
                     latest = find_latest_image(
@@ -130,13 +130,14 @@ class VirtualDesktopSoftwareStackUtils:
                         result.status = 'up_to_date'
                         result.message = f'base {latest_ami_id} is already the newest'
                         continue
-                    software_stack.base_ami_id = latest_ami_id
-                    updated_stack = self._software_stack_db.update(software_stack)
+                    updated_stack = self._software_stack_db.set_base_ami(
+                        software_stack, latest_ami_id
+                    )
                     result.new_base_ami = latest_ami_id
                     result.status = 'base_updated'
                     result.message = (
                         f'base image updated to {latest_ami_id}; desktops keep launching from '
-                        f'{software_stack.ami_id} because {latest_ami_id} has not been validated. '
+                        f'{updated_stack.ami_id} because {latest_ami_id} has not been validated. '
                         f'run Refresh and validate on the Images page to bake and promote it'
                     )
                     try:

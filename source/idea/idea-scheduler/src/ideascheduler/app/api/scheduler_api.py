@@ -40,6 +40,9 @@ from ideadatamodel.scheduler import (
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
+from ideasdk.aws.validation_identity import call_within
+from ideascheduler.app.api.active_jobs import list_active_job_page
+from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideascheduler.app.scheduler.job_param_builder import (
     JobParamsBuilderContext,
@@ -53,18 +56,59 @@ from threading import BoundedSemaphore, Event, RLock, Thread
 from typing import Optional
 
 import ideascheduler
+import errno
 import grp
 import os
 import pwd
 import re
-import shutil
+import shlex
+import stat
+import subprocess
+
+QSUB_DIRECTIVE_ERROR = 'qsub: directive error:'
+
+
+def qsub_directive_refusal(stderr: Optional[str]) -> Optional[str]:
+    """
+    what to tell the owner of a script with a #PBS line qsub cannot read, or None. qsub
+    reads those lines itself, before it asks the server: nothing reaches the submit hook,
+    so no result is recorded, and it is the script that is wrong, not the scheduler.
+    """
+    for line in Utils.get_as_string(stderr, '').splitlines():
+        if line.startswith(QSUB_DIRECTIVE_ERROR):
+            directive = line.removeprefix(QSUB_DIRECTIVE_ERROR).strip()
+            return (
+                f"This job can't be queued: qsub refused a line of the script "
+                f'(directive error: {directive}). Correct the line that reads '
+                f'#PBS {directive} and submit again.'
+            )
+    return None
+
 
 # how long a completed submission can be replayed for: must be at least
 # SERVICE_WORKER_REPLY_TIMEOUT (660s), the delay before the webapp shows a client timeout.
 JOB_SUBMISSION_DEDUPE_TTL_SECONDS = 900
+# the SDK server's default request worker count when scheduler.server.max_workers is unset
+DEFAULT_SERVER_WORKERS = 16
+# shortcut: a fixed bound on a bash submission script, not a setting; make it a
+# scheduler setting if a site's submission scripts legitimately need longer
+BASH_SUBMISSION_TIMEOUT_SECONDS = 300
+# a file call under a user's home on shared storage, and qsub, which starts in the jobs dir
+HOME_ANSWER_SECONDS = 60
+QSUB_TIMEOUT_SECONDS = 120
+
 JOB_SUBMISSION_DEDUPE_MAX_ENTRIES = 512
 # same shape as the api envelope's request_id: the value is used as a cache key and is logged.
 PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
+
+
+def home_unanswered(mount: str) -> str:
+    return (
+        f'The home directory on {mount} did not answer within {HOME_ANSWER_SECONDS} '
+        f'seconds, so the job could not be submitted. Try again later; if it repeats, '
+        f'tell an administrator to check that file system.'
+    )
+
 
 # cross-module read: the maintenance window is owned by cluster-manager. read on every
 # submission, never cached, so closing the window takes effect straight away.
@@ -197,6 +241,85 @@ def chown_fd(fd: int, user: str, group: str):
     os.fchown(fd, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
 
 
+def account_uid(user: str) -> int:
+    return pwd.getpwnam(user).pw_uid
+
+
+def open_jobs_dir(jobs_dir: str, user: str, group: str) -> int:
+    """
+    open the owner's jobs folder, creating it when missing. it is created and opened
+    relative to the opened home folder, and a new one is handed to the owner through its
+    descriptor. a link there is used only when the folder it reaches already belongs to the
+    owner. the caller works through the returned descriptor and closes it. the caller
+    resolves the account first; a folder this call made and could not hand over is removed,
+    so nothing in the home is left owned by root.
+    """
+    home, name = os.path.split(jobs_dir)
+    try:
+        home_fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        raise exceptions.general_exception(
+            f'the home folder {home} does not exist. ask an administrator to create it.'
+        )
+    created = False
+    fd = None
+    try:
+        try:
+            os.mkdir(name, dir_fd=home_fd)
+            created = True
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home_fd
+            )
+            linked = False
+        except OSError as e:
+            if e.errno not in (errno.ELOOP, errno.ENOTDIR):
+                raise
+            # a link to a folder elsewhere (scratch, to save home quota) is followed only to
+            # the descriptor, which is then checked below; it is never handed over
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=home_fd)
+            except OSError:
+                raise exceptions.general_exception(
+                    f'{jobs_dir} is not a folder or a link to one. remove it and try again.'
+                )
+            linked = True
+        info = os.fstat(fd)
+        # a folder in the home itself (not a link), owned by this process and empty: made
+        # here a moment ago, or left by an earlier submission that could not hand it over
+        # (before 26.11.2 a user the scheduler host could not resolve yet locked themself
+        # out this way). either is handed to the owner
+        fresh = (
+            stat.S_ISDIR(info.st_mode)
+            and not linked
+            and info.st_uid == os.geteuid()
+            and not os.listdir(fd)
+        )
+        if not stat.S_ISDIR(info.st_mode) or (
+            not fresh and info.st_uid != account_uid(user)
+        ):
+            raise exceptions.general_exception(
+                f'{jobs_dir} does not belong to {user}. ask an administrator to fix its owner.'
+            )
+        if fresh:
+            chown_fd(fd, user=user, group=group)
+        return fd
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        if created:
+            # never leave a root-owned folder behind in the owner's home
+            try:
+                os.rmdir(name, dir_fd=home_fd)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(home_fd)
+
+
 class JobSubmissionEntry:
     def __init__(self, fingerprint: str, result: Optional[SubmitJobResult] = None):
         self.fingerprint = fingerprint
@@ -279,6 +402,14 @@ class SchedulerAPI(BaseAPI):
         self.logger = context.logger('scheduler-api')
         self.group_name_helper = GroupNameHelper(context)
         self.job_submission_deduplicator = JobSubmissionDeduplicator()
+        # a submission holds a request worker inside qsub while qsub waits for the PBS
+        # hook, whose answer needs a worker from the same pool; past half the pool, a
+        # submission is refused as busy instead of starving the hooks (SCHED-14)
+        workers = self.context.config().get_int(
+            'scheduler.server.max_workers', default=DEFAULT_SERVER_WORKERS
+        )
+        workers = workers if isinstance(workers, int) else DEFAULT_SERVER_WORKERS
+        self.submission_slots = BoundedSemaphore(max(1, workers // 2))
 
         self.SCOPE_WRITE = f'{self.context.module_id()}/write'
         self.SCOPE_READ = f'{self.context.module_id()}/read'
@@ -333,10 +464,8 @@ class SchedulerAPI(BaseAPI):
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
-        page_size = payload.page_size
-        page_start = payload.page_start
-        entries = self.context.job_cache.list_jobs(
-            owner=context.get_username(), _limit=page_size, _offset=page_start
+        entries, total = list_active_job_page(
+            self.context, payload, owner=context.get_username()
         )
         # enriched here rather than in the job cache: the signals are per-request and
         # must not be written back into the cached job_data by an internal sync.
@@ -345,13 +474,13 @@ class SchedulerAPI(BaseAPI):
             jobs=entries,
             is_administrator=self._caller_is_administrator(context),
         )
-        total = self.context.job_cache.get_count(owner=context.get_username())
 
         context.success(
             ListJobsResult(
                 paginator=SocaPaginator(
                     total=total, page_size=payload.page_size, start=payload.page_start
                 ),
+                filters=payload.filters,
                 listing=entries,
             )
         )
@@ -464,6 +593,17 @@ class SchedulerAPI(BaseAPI):
                 'job_script_interpreter must be one of [pbs, bash]'
             )
 
+        # the project names one the owner belongs to, the same list the submit hook checks
+        if Utils.is_not_empty(request.project) and request.project not in {
+            project.name
+            for project in self.context.projects_client.get_user_projects(
+                username=job_owner
+            )
+        }:
+            raise exceptions.invalid_params(
+                f'You are not a member of project {request.project!r}.'
+            )
+
         if Utils.is_not_empty(client_submission_id) and not re.match(
             PATTERN_CLIENT_SUBMISSION_ID, client_submission_id
         ):
@@ -500,8 +640,11 @@ class SchedulerAPI(BaseAPI):
             result = self._submit_job(
                 request=request, job_owner=job_owner, dry_run=dry_run
             )
-        except BaseException:
-            self.job_submission_deduplicator.rollback(dedupe_key)
+        except BaseException as error:
+            # a qsub that timed out may have queued the job: the key stays claimed for its
+            # lifetime, so a retry with the same id is refused instead of queuing a second
+            if not getattr(error, 'submission_indeterminate', False):
+                self.job_submission_deduplicator.rollback(dedupe_key)
             raise
 
         if Utils.get_as_bool(result.accepted, False):
@@ -520,6 +663,23 @@ class SchedulerAPI(BaseAPI):
         job_owner: str,
         dry_run: Optional[DryRunOption],
     ) -> SubmitJobResult:
+        if not self.submission_slots.acquire(blocking=False):
+            raise exceptions.soca_exception(
+                errorcodes.SCHEDULER_QUEUE_BUSY,
+                'The scheduler is busy with other job submissions. Try again in a few '
+                'seconds.',
+            )
+        try:
+            return self._submit_job_in_slot(request, job_owner, dry_run)
+        finally:
+            self.submission_slots.release()
+
+    def _submit_job_in_slot(
+        self,
+        request: SubmitJobRequest,
+        job_owner: str,
+        dry_run: Optional[DryRunOption],
+    ) -> SubmitJobResult:
         job_script = request.job_script
         job_script_interpreter = request.job_script_interpreter
 
@@ -527,16 +687,6 @@ class SchedulerAPI(BaseAPI):
             'shared-storage.data.mount_dir', required=True
         )
         job_submission_dir = os.path.join(data_dir, 'home', job_owner, 'jobs')
-
-        if Utils.is_symlink(job_submission_dir):
-            raise exceptions.general_exception(
-                f'a symbolic link exists at location: {job_submission_dir}. delete the symbolic link and try again.'
-            )
-
-        if not Utils.is_dir(job_submission_dir):
-            os.makedirs(job_submission_dir)
-            group_name = self.group_name_helper.get_user_group(job_owner)
-            shutil.chown(job_submission_dir, user=job_owner, group=group_name)
 
         job_uid = Utils.short_uuid()
         # Try to extract job name from PBS script if present
@@ -556,45 +706,111 @@ class SchedulerAPI(BaseAPI):
         script_name = f'{filename_base}{extension}'
         job_submit_script = os.path.join(job_submission_dir, script_name)
 
-        # defense in depth: the resolved target must resolve to a direct child of the
-        # user's jobs dir. rejects any residual traversal or a symlinked directory.
-        real_dir = os.path.realpath(job_submission_dir)
-        real_target = os.path.realpath(job_submit_script)
-        if os.path.dirname(real_target) != real_dir:
-            raise exceptions.general_exception(
-                f'refusing to write job script outside {job_submission_dir}'
+        group_name = self.group_name_helper.get_user_group(job_owner)
+        # the account is resolved before anything is made in the home: the scheduler host
+        # learns a new user at its next user sync (IDEA_USER_SYNC_INTERVAL, 60 s)
+        try:
+            account_uid(job_owner)
+        except KeyError:
+            raise exceptions.soca_exception(
+                errorcodes.JOB_SUBMISSION_FAILED,
+                f'Your account {job_owner} is not yet known to the scheduler host. Try '
+                f'again in a minute.',
             )
 
-        group_name = self.group_name_helper.get_user_group(job_owner)
-        # the script is created relative to the opened jobs dir and chowned through its fd,
-        # so nothing swapped in between the checks above and the write can redirect it.
-        dir_fd = os.open(
-            job_submission_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        )
-        try:
-            with open_new_job_script(script_name, dir_fd=dir_fd) as f:
-                f.write(Utils.base64_decode(job_script))
-                f.write('\n')
-                chown_fd(f.fileno(), user=job_owner, group=group_name)
-        finally:
-            os.close(dir_fd)
+        def write_script() -> int:
+            # defense in depth: the resolved target must resolve to a direct child of the
+            # user's jobs dir. rejects any residual traversal or a symlinked directory.
+            real_dir = os.path.realpath(job_submission_dir)
+            real_target = os.path.realpath(job_submit_script)
+            if os.path.dirname(real_target) != real_dir:
+                raise exceptions.general_exception(
+                    f'refusing to write job script outside {job_submission_dir}'
+                )
+            # the script is created relative to the jobs dir opened and checked here and
+            # chowned through its fd, so nothing swapped in at the path can redirect it.
+            fd = open_jobs_dir(job_submission_dir, user=job_owner, group=group_name)
+            created = False
+            try:
+                with open_new_job_script(script_name, dir_fd=fd) as f:
+                    created = True
+                    f.write(Utils.base64_decode(job_script))
+                    f.write('\n')
+                    chown_fd(f.fileno(), user=job_owner, group=group_name)
+            except BaseException:
+                # a script this call created and could not finish (a full quota) is removed
+                if created:
+                    try:
+                        os.unlink(script_name, dir_fd=fd)
+                    except OSError:
+                        pass
+                os.close(fd)
+                raise
+            return fd
 
-        # the script stays in the owner's jobs dir only when the submit command succeeded;
-        # a refusal, a dry run or an exception before then leaves no file behind.
+        def remove(names, fd):
+            for name in names:
+                try:
+                    os.unlink(name, dir_fd=fd)
+                except OSError:
+                    pass
+            os.close(fd)
+
+        # the home is on shared storage: a hard mount that stops answering blocks a file
+        # call for ever, which held this request worker and the submission slot (the image
+        # validation hung here). a script written after the wait was given up is removed
+        try:
+            dir_fd = call_within(
+                write_script,
+                HOME_ANSWER_SECONDS,
+                on_late=lambda fd: remove([script_name], fd),
+            )
+        except TimeoutError:
+            raise exceptions.soca_exception(
+                errorcodes.JOB_SUBMISSION_FAILED,
+                home_unanswered(data_dir),
+            )
+
+        # the script stays in the owner's jobs dir, where the owner and an administrator read
+        # it afterwards, when the job was queued or a dry run passed; the result then names it.
+        # a refusal, a failed dry run or an exception leaves no file behind. it is written and
+        # removed only through dir_fd, never by its path, which the owner can change.
+        keep_script = False
+        # a bash script's output: kept for the owner only when the script failed
+        log_name = None
+        keep_log = False
         try:
             if job_script_interpreter == 'pbs':
-                job_submit_command = ['cd', job_submission_dir, '&&', 'qsub']
+                command = ['qsub']
                 if dry_run is not None:
-                    job_submit_command += ['-l', f'dry_run={dry_run}']
+                    command += ['-l', f'dry_run={dry_run.value}']
                 if Utils.is_not_empty(request.project):
-                    job_submit_command += ['-P', f'"{request.project}"']
+                    command += ['-P', request.project]
+                command += ['-l', f'job_uid={job_uid}', job_submit_script]
 
-                job_submit_command += ['-l', f'job_uid={job_uid}', job_submit_script]
-                job_submit_command_str = ' '.join(job_submit_command)
-                command = ['su', job_owner, '-c', f'{job_submit_command_str}']
-
-                self.logger.info(' '.join(command))
-                result = self.context.shell.invoke(command)
+                self.logger.info(f'as {job_owner}: {shlex.join(command)}')
+                try:
+                    # qsub starts in the owner's jobs dir and reads the script there
+                    result = self.context.shell.invoke_as_user(
+                        job_owner,
+                        command,
+                        cwd=job_submission_dir,
+                        timeout=QSUB_TIMEOUT_SECONDS,
+                    )
+                except subprocess.TimeoutExpired:
+                    keep_script = True
+                    self.logger.error(
+                        f'qsub did not finish in {QSUB_TIMEOUT_SECONDS} s: '
+                        f'{shlex.join(command)}'
+                    )
+                    timed_out = exceptions.soca_exception(
+                        errorcodes.JOB_SUBMISSION_FAILED,
+                        f'The submission did not finish within {QSUB_TIMEOUT_SECONDS} '
+                        f'seconds; the home directory on {data_dir} may not be answering. '
+                        f'Check Active Jobs before submitting it again.',
+                    )
+                    timed_out.submission_indeterminate = True
+                    raise timed_out
 
                 job_id = None
                 if result.returncode == 0:
@@ -612,21 +828,22 @@ class SchedulerAPI(BaseAPI):
                         self.logger.error(f'Failed to submit job: {result}')
                         raise exceptions.soca_exception(
                             errorcodes.JOB_SUBMISSION_FAILED,
-                            f'Failed to submit job: {result}',
+                            qsub_directive_refusal(result.stderr)
+                            or JOB_INTERNAL_ERROR_MESSAGE,
                         )
                     # rc == 0 but the tracker has no record for this job_uid (tracker TTL
                     # miss): avoid the opaque AttributeError and report clearly instead.
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        'Job was submitted but the submission result could not be retrieved. '
-                        'Check job status with qstat before resubmitting.',
+                        'Your job was submitted, but the result could not be read. '
+                        'Check Active Jobs before submitting it again.',
                     )
 
                 if job_id is not None:
                     submission_result.job.job_id = job_id
 
                 # a refused submission is a failure, not a success with accepted=False. use the
-                # hook's own message text - the shell repr leaks the su command line and home path.
+                # hook's own message text - the shell repr leaks the command line and home path.
                 if dry_run is None and result.returncode != 0:
                     self.logger.error(f'Failed to submit job: {result}')
                     reason = (
@@ -636,40 +853,100 @@ class SchedulerAPI(BaseAPI):
                     )
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        f'Failed to submit job: {reason}',
+                        reason.removeprefix('qsub: ').strip()
+                        if Utils.is_not_empty(reason)
+                        else JOB_INTERNAL_ERROR_MESSAGE,
                     )
 
+                # a dry run is never 'accepted', so a passed one is a report with no findings
+                findings = [
+                    entry
+                    for report in (
+                        submission_result.validations,
+                        submission_result.incidentals,
+                    )
+                    if report is not None
+                    for entry in report.results or []
+                ]
+                keep_script = dry_run is None or not findings
+                if keep_script:
+                    submission_result.job_script_path = job_submit_script
                 return submission_result
 
             elif job_script_interpreter == 'bash':
-                job_submit_command = [
-                    'cd',
-                    job_submission_dir,
-                    '&&',
-                    'bash',
-                    job_submit_script,
-                ]
+                # a bash script is run, not validated: a dry run would submit for real
+                if dry_run is not None:
+                    raise exceptions.invalid_params(
+                        'A dry run is not available for bash scripts. Submit the job, '
+                        'or use a PBS script to check it first.'
+                    )
+                command = ['bash', job_submit_script]
 
-                job_submit_command_str = ' '.join(job_submit_command)
-                command = ['su', job_owner, '-c', f'{job_submit_command_str}']
+                # the script's output goes to <script>.log in the owner's jobs folder,
+                # never into this service's memory or log; it is kept when the script fails
+                log_name = f'{script_name}.log'
 
-                self.logger.info(' '.join(command))
-                result = self.context.shell.invoke(command)
+                def open_log():
+                    log = open_new_job_script(log_name, dir_fd=dir_fd)
+                    chown_fd(log.fileno(), user=job_owner, group=group_name)
+                    return log
 
-                if result.returncode == 0:
-                    return SubmitJobResult(accepted=True)
-                else:
+                try:
+                    log = call_within(open_log, HOME_ANSWER_SECONDS)
+                except TimeoutError:
+                    log_name = None
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        f'Failed to submit job: {result}',
+                        home_unanswered(data_dir),
+                    )
+                with log:
+                    self.logger.info(f'as {job_owner}: {shlex.join(command)}')
+                    try:
+                        result = self.context.shell.invoke_as_user(
+                            job_owner,
+                            command,
+                            cwd=job_submission_dir,
+                            timeout=BASH_SUBMISSION_TIMEOUT_SECONDS,
+                            output_fd=log.fileno(),
+                        )
+                    except subprocess.TimeoutExpired:
+                        keep_log = True
+                        self.logger.error(
+                            f'bash submission did not finish in '
+                            f'{BASH_SUBMISSION_TIMEOUT_SECONDS} s: {shlex.join(command)}'
+                        )
+                        raise exceptions.soca_exception(
+                            errorcodes.JOB_SUBMISSION_FAILED,
+                            f'The submission script did not finish within '
+                            f'{BASH_SUBMISSION_TIMEOUT_SECONDS} seconds. A submission '
+                            f'script should submit the job and end; run long work inside '
+                            f'the job. Its output is in {job_submit_script}.log.',
+                        )
+
+                if result.returncode == 0:
+                    keep_script = True
+                    return SubmitJobResult(
+                        accepted=True, job_script_path=job_submit_script
+                    )
+                else:
+                    keep_log = True
+                    self.logger.error(
+                        f'bash submission as {job_owner} exited {result.returncode}'
+                    )
+                    raise exceptions.soca_exception(
+                        errorcodes.JOB_SUBMISSION_FAILED,
+                        f'The submission script exited with status {result.returncode}. '
+                        f'Its output is in {job_submit_script}.log.',
                     )
         finally:
-            # qsub copies the script into the PBS spool, so the file has no reader after
-            # submission; removing it on every outcome leaves nothing root-created behind.
+            removed = [] if keep_script else [script_name]
+            if log_name is not None and not keep_log:
+                removed.append(log_name)
             try:
-                os.remove(job_submit_script)
-            except OSError:
-                pass
+                call_within(lambda: remove(removed, dir_fd), HOME_ANSWER_SECONDS)
+            except TimeoutError:
+                # finished on its own thread when the mount answers again
+                self.logger.warning(home_unanswered(data_dir))
 
     def list_queues(self, context: ApiInvocationContext):
         """

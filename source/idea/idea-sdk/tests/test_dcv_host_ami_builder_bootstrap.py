@@ -5,6 +5,7 @@ the first-boot skip markers the session bootstrap checks.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -210,6 +211,8 @@ wget() { :; }
 gpg() { :; }
 grubby() { echo "grubby $*" >> "$CALLS"; }
 update-grub() { echo update-grub >> "$CALLS"; }
+timeout() { shift; "$@"; }
+update-initramfs() { echo x > "$BOOTSTRAP_DIR/initrd.img-$3"; }
 set_reboot_required() { echo "reboot_required $*" >> "$CALLS"; }
 check_reboot_loop() { :; }
 crontab() { :; }
@@ -232,6 +235,8 @@ mount() {
   if [[ "$*" != *nolustre* ]]; then MOUNTED=1; fi
 }
 findmnt() { [[ "$MOUNTED" == 1 ]]; }
+# the EFS shares mount with mount -a; a deferred Lustre share is not expected yet
+mountpoint() { return 0; }
 lctl() { echo "lctl $*" >> "$CALLS"; [[ "$MOUNTED" == 1 ]]; }
 """
 
@@ -270,6 +275,7 @@ def run_set_kernel(
         .replace('/etc/default/grub', f'{tmp_path}/grub')
         .replace('/boot/', f'{tmp_path}/')
         .replace('/etc/modprobe.d/', f'{tmp_path}/')
+        .replace('/etc/dracut.conf.d', f'{tmp_path}/dracut.conf.d')
     )
     (tmp_path / 'grub').write_text('GRUB_DEFAULT=0\n')
     calls = tmp_path / 'calls'
@@ -281,6 +287,11 @@ def run_set_kernel(
         + 'sleep() { :; }\n'
         + KERNEL_STUBS
         + (STORAGE_STUBS if storage_stage else '')
+        + (
+            Path(environment['EXTRA_STUBS']).read_text()
+            if environment.get('EXTRA_STUBS')
+            else ''
+        )
         + rendered
     )
     result = subprocess.run(
@@ -325,6 +336,18 @@ def test_el_on_its_target_series_does_not_reboot(tmp_path):
     assert 'reboot' not in calls
 
 
+def test_an_el99_desktop_keeps_its_series(tmp_path):
+    # Rocky 9.9 images boot 741, which has an FSx client, and Rocky's repository has no 687
+    running = '5.14.0-741.22.1.el9_9.x86_64'
+    for base_os in ('rocky9', 'rhel9'):
+        code, calls = run_set_kernel(tmp_path, base_os, running)
+        assert code == 0, calls
+        assert 'reboot' not in calls
+        assert 'kernel-5.14.0-687' not in calls
+        assert 'kernel-core-5.14.0-741*' in calls
+        assert f'dnf versionlock kernel-{running} ' in calls
+
+
 def test_ubuntu_keeps_the_kernel_its_image_boots(tmp_path):
     # the repository has a module for the running ABI, even when a newer one exists
     code, calls = run_set_kernel(tmp_path, 'ubuntu2204', '6.8.0-1061-aws')
@@ -351,6 +374,149 @@ def test_a_kernel_that_cannot_be_installed_aborts_with_its_own_status(tmp_path):
     assert code == 1
     assert 'Value=kernel-install-failed' in calls
     assert 'reboot' not in calls
+
+
+OLD_SERIES = '5.14.0-570.1.1.el9_6.x86_64'
+TARGET_SERIES = '5.14.0-687.5.1.el9_8.x86_64'
+
+
+def series_change(
+    tmp_path, initramfs=True, dracut_builds=False, set_default_works=True
+):
+    """a Rocky 9 bake from a base image on an older kernel series than the target"""
+    stubs = tmp_path / 'stubs.sh'
+    image = f'{tmp_path}/initramfs-{TARGET_SERIES}.img'
+    default = tmp_path / 'default'
+    default.write_text(f'{tmp_path}/vmlinuz-{TARGET_SERIES}\n')
+    stubs.write_text(
+        f"""
+find() {{ echo {tmp_path}/vmlinuz-{TARGET_SERIES}; }}
+ls() {{ echo {tmp_path}/vmlinuz-{TARGET_SERIES}; }}
+rpm() {{ echo kernel-{TARGET_SERIES}; }}
+dracut() {{ echo "dracut $*" >> "$CALLS"; {f'echo x > {image}' if dracut_builds else 'return 1'}; }}
+# placeholder images: a host's own lister would reject them
+lsinitrd() {{ :; }}
+grubby() {{
+  echo "grubby $*" >> "$CALLS"
+  case "$1" in
+    --default-kernel) command cat {default} ;;
+    --set-default) {f'echo "$2" > {default}' if set_default_works else 'return 1'} ;;
+  esac
+}}
+"""
+    )
+    if initramfs:
+        Path(image).write_text('x')
+    (tmp_path / f'vmlinuz-{TARGET_SERIES}').write_text('')
+    return stubs, default
+
+
+def run_series_change(tmp_path, stubs):
+    return run_set_kernel(
+        tmp_path,
+        'rocky9',
+        OLD_SERIES,
+        lustre=False,
+        KERNEL_BOOT_DIR=str(tmp_path),
+        DRACUT_CONF_DIR=str(tmp_path / 'dracut.conf.d'),
+        EXTRA_STUBS=str(stubs),
+    )
+
+
+def test_a_series_change_boots_a_kernel_that_has_its_initramfs(tmp_path):
+    stubs, default = series_change(tmp_path)
+    code, calls = run_series_change(tmp_path, stubs)
+    assert code == 0, calls
+    assert f'grubby --set-default {tmp_path}/vmlinuz-{TARGET_SERIES}' in calls
+    assert 'reboot' in calls
+
+
+def test_a_series_change_builds_a_missing_initramfs(tmp_path):
+    stubs, _ = series_change(tmp_path, initramfs=False, dracut_builds=True)
+    code, calls = run_series_change(tmp_path, stubs)
+    assert code == 0, calls
+    assert 'dracut -f' in calls
+    assert 'reboot' in calls
+
+
+def test_a_series_change_with_no_initramfs_stays_on_the_running_kernel_and_stops(
+    tmp_path,
+):
+    stubs, default = series_change(tmp_path, initramfs=False)
+    code, calls = run_series_change(tmp_path, stubs)
+    assert code == 1
+    assert default.read_text().strip() == f'{tmp_path}/vmlinuz-{OLD_SERIES}'
+    assert 'Value=kernel-boot-mismatch' in calls
+    assert 'reboot_required' not in calls and '\nreboot' not in calls
+
+
+def test_a_series_change_that_cannot_select_the_kernel_stops(tmp_path):
+    stubs, _ = series_change(tmp_path, set_default_works=False)
+    code, calls = run_series_change(tmp_path, stubs)
+    assert code == 1
+    assert 'Value=kernel-boot-mismatch' in calls
+    assert 'reboot_required' not in calls
+
+
+def test_a_series_change_drops_rescue_images_before_the_install():
+    rendered = render('_templates/linux/set_kernel.jinja2', base_os='rocky9')
+    install = rendered[rendered.index('function install_target_kernel()') :]
+    # make_boot_room_for_kernel drops them, and in a bake the older kernels too
+    assert install.index('make_boot_room_for_kernel') < install.index(
+        'dnf install -y kernel-'
+    )
+    room = rendered[rendered.index('function make_boot_room_for_kernel()') :]
+    assert room.index('drop_rescue_images') < room.index('BAKE_STAGE')
+
+
+def ubuntu_bake(tmp_path, abi, initrd, builds=False):
+    (tmp_path / f'vmlinuz-{abi}').write_text('')
+    stubs = tmp_path / 'stubs.sh'
+    image = tmp_path / f'initrd.img-{abi}'
+    if initrd:
+        image.write_text('x')
+    stubs.write_text(
+        'update-initramfs() { echo "update-initramfs $*" >> "$CALLS"; '
+        + (f'echo x > {image}; ' if builds else 'return 1; ')
+        + '}\n'
+    )
+    return stubs
+
+
+UBUNTU_ABI = '6.8.0-1057-aws'
+
+
+def run_ubuntu_bake(tmp_path, stubs):
+    return run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        UBUNTU_ABI,
+        lustre=False,
+        BAKE_STAGE='dcv',
+        EXTRA_STUBS=str(stubs),
+    )
+
+
+def test_ubuntu_selects_a_kernel_that_has_its_initrd(tmp_path):
+    code, calls = run_ubuntu_bake(tmp_path, ubuntu_bake(tmp_path, UBUNTU_ABI, True))
+    assert code == 0, calls
+    assert 'update-grub' in calls and 'update-initramfs' not in calls
+
+
+def test_ubuntu_builds_a_missing_initrd_before_selecting_the_kernel(tmp_path):
+    code, calls = run_ubuntu_bake(
+        tmp_path, ubuntu_bake(tmp_path, UBUNTU_ABI, False, builds=True)
+    )
+    assert code == 0, calls
+    assert calls.index('update-initramfs') < calls.index('update-grub')
+
+
+def test_ubuntu_never_selects_a_kernel_with_no_initrd(tmp_path):
+    code, calls = run_ubuntu_bake(tmp_path, ubuntu_bake(tmp_path, UBUNTU_ABI, False))
+    assert code == 1
+    assert 'Value=kernel-boot-mismatch' in calls
+    assert 'update-grub' not in calls
+    assert 'GRUB_DEFAULT' not in (tmp_path / 'calls').read_text()
 
 
 def test_ubuntu2404_keeps_networkd_during_bootstrap():
@@ -422,22 +588,28 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
         in checks
     )
     assert 'command -v mount.lustre' in checks
-    assert 'findmnt -rn -t lustre --mountpoint "/lustre"' in checks
+    assert "findmnt -rn -t lustre --mountpoint '/lustre'" in checks
 
 
-# EL kernel snapshots from 81d856e9, updated to defer reboot until cloud-final exits and to
-# install the newest kernel of the target series before locking it.
+# EL kernel snapshots from 81d856e9, updated to defer reboot until cloud-final exits, to install
+# the newest kernel of the target series before locking it, to free /boot for it, to fail a
+# bootstrap that cannot put the running kernel back as the default, to apply the initramfs test
+# and rescue removal to a series change as well, and to keep the running kernel when the newer one
+# has no FSx for Lustre module (compute bakes report a failure through their in-bake checks),
+# and to keep an EL 9.9 (741) image on its own series. A cluster without Lustre gets no kernel series
+# move, so these renders change only by blank lines; a bake makes room on /boot before a kernel
+# install that is not already on disk.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
         (
             'amazonlinux2023',
-            'ca5197809b391c3daf0057fb2aaeb72c19d37964bbe50b61b723e79374c12e8f',
+            '8975140e91aa04eab33e9083b442c4111df26b7d9c96cfa1794a53c154b8be08',
         ),
-        ('rhel8', 'a6539a5649dd64b73022c743a077711f064c6c9c0b4b652af3949718254a64a8'),
-        ('rocky8', 'a6539a5649dd64b73022c743a077711f064c6c9c0b4b652af3949718254a64a8'),
-        ('rhel9', '5057eabf0c153e63dae4c76be293ae7b1353498828c4ae476362033ebceb4732'),
-        ('rocky9', '5057eabf0c153e63dae4c76be293ae7b1353498828c4ae476362033ebceb4732'),
+        ('rhel8', 'e5234441e9f34c65fb3aafd14db0e7bb77dbd330365ee8c8abd2dde51e6cf1bf'),
+        ('rocky8', 'e5234441e9f34c65fb3aafd14db0e7bb77dbd330365ee8c8abd2dde51e6cf1bf'),
+        ('rhel9', '5b42427820dd8bbccb651ee4fe973a6cf6d803e6736b28b6bfc8a0dc3995f23e'),
+        ('rocky9', '5b42427820dd8bbccb651ee4fe973a6cf6d803e6736b28b6bfc8a0dc3995f23e'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
@@ -447,7 +619,13 @@ def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
 
     text = Template(
         Path(IDEA_BOOTSTRAP_DIR, '_templates/linux/set_kernel.jinja2').read_text()
-    ).render(context={'base_os': base_os, 'aws_region': 'us-east-1'})
+    ).render(
+        context={
+            'base_os': base_os,
+            'aws_region': 'us-east-1',
+            'has_storage_provider': lambda provider: False,
+        }
+    )
     assert hashlib.sha256(text.encode()).hexdigest() == expected
 
 
@@ -786,14 +964,16 @@ def test_el_fsx_lustre_imports_a_key_the_os_accepts_and_logs_a_failed_import(bas
     # rpm-sequoia on EL10 refuses fsx-rpm-public-key.asc (SHA-1 binding signature only);
     # the el/10 packages are signed by fsx-rpm-public-key-2.asc instead
     rendered = render('_templates/linux/fsx_lustre_client.jinja2', base_os=base_os)
-    key = 'https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/'
+    key = 'import_fsx_rpm_key '
     if base_os.endswith('10'):
-        assert f'{key}fsx-rpm-public-key-2.asc ' in rendered
-        assert f'{key}fsx-rpm-public-key.asc ' not in rendered
+        assert f'{key}fsx-rpm-public-key-2 ' in rendered
+        assert f'{key}fsx-rpm-public-key ' not in rendered
     else:
-        assert f'{key}fsx-rpm-public-key.asc ' in rendered
-        assert f'{key}fsx-rpm-public-key-2.asc ' not in rendered
-    imports = [line for line in rendered.splitlines() if 'rpm --import' in line]
+        assert f'{key}fsx-rpm-public-key ' in rendered
+        assert f'{key}fsx-rpm-public-key-2 ' not in rendered
+    imports = [
+        line for line in rendered.splitlines() if 'import_fsx_rpm_key fsx-' in line
+    ]
     assert imports
     for line in imports:
         assert (

@@ -24,13 +24,16 @@ function Configure-InstanceStorage {
     $BootDiskNumber = (Get-Partition -DriveLetter C).DiskNumber
     Write-ToLog -Message "Boot disk identified as Disk $BootDiskNumber" -Level 'Info'
 
-    # Get all physical disks that are not already initialized and could be instance store
-    # Instance store can be NVMe (newer instances) or other types (older instances)
+    # Physical disks that are not initialized and are not EBS volumes: a blank EBS volume attached
+    # to the desktop is the owner's disk, not ephemeral storage. Instance store can be NVMe (newer
+    # instances) or other types (older instances). The partition style is a property of the disk
+    # (Get-Disk), not of the physical disk object.
     $InstanceStoreDisks = Get-PhysicalDisk | Where-Object {
         $_.OperationalStatus -eq 'OK' -and
-        ($_.PartitionStyle -eq 'RAW' -or $_.PartitionStyle -eq 'Unknown' -or [string]::IsNullOrEmpty($_.PartitionStyle)) -and
+        $_.FriendlyName -notlike '*Amazon Elastic B*' -and
         $_.Size -gt 0 -and
-        $_.DeviceId -ne $BootDiskNumber  # Exclude boot disk
+        $_.DeviceId -ne $BootDiskNumber -and  # Exclude boot disk
+        (Get-Disk -Number $_.DeviceId -ErrorAction SilentlyContinue).PartitionStyle -eq 'RAW'
     }
 
     if (-not $InstanceStoreDisks) {

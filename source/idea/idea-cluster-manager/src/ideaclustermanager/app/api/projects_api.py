@@ -200,7 +200,8 @@ class ProjectsAPI(BaseAPI):
             username=context.get_username(),
             project_id=result.project.project_id,
         )
-        if not is_member:
+        # a disabled project is answered as one the caller is not in
+        if not is_member or not result.project.enabled:
             raise exceptions.unauthorized_access()
 
         self.apply_budget_actuals(result.project)

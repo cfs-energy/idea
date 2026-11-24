@@ -13,30 +13,15 @@ Statement:
     Effect: Allow
     Sid: CloudWatchLogStreamPermissions
 
+  # The handler only finds the certificate and the two secrets the deploy tool imported.
   - Action:
-      - acm:ImportCertificate
       - acm:ListCertificates
-      - acm:DeleteCertificate
-      - acm:AddTagsToCertificate
     Resource: '*'
     Effect: Allow
     Sid: ACMPermissions
 
-    {% if context.config.get_string('cluster.secretsmanager.kms_key_id') %}
-  - Action:
-      - kms:GenerateDataKey
-      - kms:Decrypt
-    Resource:
-      - '{{ context.arns.kms_secretsmanager_key_arn }}'
-    Effect: Allow
-    {% endif %}
-
   - Action:
       - secretsmanager:ListSecrets
-      - secretsmanager:DeleteSecret
-      - secretsmanager:GetSecretValue
-      - secretsmanager:CreateSecret
-      - secretsmanager:TagResource
     Resource: '*'
     Effect: Allow
     Sid: SecretsManagerPermissions

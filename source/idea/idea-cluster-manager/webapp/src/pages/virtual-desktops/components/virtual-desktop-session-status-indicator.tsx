@@ -20,6 +20,8 @@ export interface VirtualDesktopSessionStatusIndicatorProps {
     hibernation_enabled: boolean
     // last time the session changed, used to show how long a desktop has been waiting
     updated_on?: string
+    // the desktop is up but its remote session is being restarted, so it is not usable yet
+    recovering?: boolean
 }
 
 const WAITING_STATES: VirtualDesktopSessionState[] = ['PROVISIONING', 'INITIALIZING', 'CREATING', 'RESUMING']
@@ -39,39 +41,51 @@ export function waitedFor(props: VirtualDesktopSessionStatusIndicatorProps): str
     return ` - ${minutes} min so far`
 }
 
-function VirtualDesktopSessionStatusIndicator(props: VirtualDesktopSessionStatusIndicatorProps) {
-    const waiting = waitedFor(props)
-    switch (props.state) {
+/** One word per state, shared by the status line, the card button and the preview. */
+export function desktopStateLabel(state: VirtualDesktopSessionState | undefined, hibernation_enabled?: boolean): string {
+    switch (state) {
         case 'PROVISIONING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Provisioning{waiting}</StatusIndicator>
         case 'INITIALIZING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Initializing{waiting}</StatusIndicator>
         case 'CREATING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Creating{waiting}</StatusIndicator>
+            return 'Setting up'
         case 'READY':
-            return <StatusIndicator type="success">Ready</StatusIndicator>
+            return 'Ready'
         case 'STOPPING':
-            if (props.hibernation_enabled) {
-                return <StatusIndicator type="in-progress" colorOverride="blue">Hibernating</StatusIndicator>
-            } else {
-                return <StatusIndicator type="in-progress" colorOverride="blue">Stopping</StatusIndicator>
-            }
+            return hibernation_enabled ? 'Hibernating' : 'Stopping'
         case 'STOPPED':
-            if (props.hibernation_enabled) {
-                return <StatusIndicator type="info" colorOverride="grey">Hibernated</StatusIndicator>
-            } else {
-                return <StatusIndicator type="info" colorOverride="grey">Stopped</StatusIndicator>
-            }
+            return hibernation_enabled ? 'Hibernated' : 'Stopped'
         case 'RESUMING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Resuming{waiting}</StatusIndicator>
+            return 'Starting'
         case 'DELETING':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Deleting</StatusIndicator>
         case 'DELETED':
-            return <StatusIndicator type="in-progress" colorOverride="blue">Deleting</StatusIndicator>
+            return 'Terminating'
         case 'ERROR':
-            return <StatusIndicator type="error">Error</StatusIndicator>
+            return 'Failed'
     }
-    return <StatusIndicator type="error">Unknown</StatusIndicator>
+    return 'Unknown'
+}
+
+function VirtualDesktopSessionStatusIndicator(props: VirtualDesktopSessionStatusIndicatorProps) {
+    if (props.recovering) {
+        return <StatusIndicator type="in-progress" colorOverride="blue">Restarting</StatusIndicator>
+    }
+    const label = desktopStateLabel(props.state, props.hibernation_enabled)
+    switch (props.state) {
+        case 'READY':
+            return <StatusIndicator type="success">{label}</StatusIndicator>
+        case 'STOPPED':
+            return <StatusIndicator type="info" colorOverride="grey">{label}</StatusIndicator>
+        case 'PROVISIONING':
+        case 'INITIALIZING':
+        case 'CREATING':
+        case 'RESUMING':
+            return <StatusIndicator type="in-progress" colorOverride="blue">{label}{waitedFor(props)}</StatusIndicator>
+        case 'STOPPING':
+        case 'DELETING':
+        case 'DELETED':
+            return <StatusIndicator type="in-progress" colorOverride="blue">{label}</StatusIndicator>
+    }
+    return <StatusIndicator type="error">{label}</StatusIndicator>
 }
 
 export default VirtualDesktopSessionStatusIndicator

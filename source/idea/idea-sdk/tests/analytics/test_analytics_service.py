@@ -304,3 +304,28 @@ def test_same_document_id_in_different_indexes_is_independent(monkeypatch):
     assert service._post_entries_to_kinesis()
     assert service._buffer == []
     assert len(client.put_records.call_args.kwargs['Records']) == 2
+
+
+def test_stopping_sends_what_arrived_after_the_last_send(monkeypatch):
+    kinesis_client = Mock()
+    kinesis_client.put_records.return_value = {'FailedRecordCount': 0}
+    context = Mock()
+    context.config.return_value.get_string.return_value = 'analytics-stream'
+    context.aws.return_value.kinesis.return_value = kinesis_client
+    monkeypatch.setattr(
+        'ideasdk.analytics.analytics_service.AwsOpenSearchClient', Mock()
+    )
+    service = AnalyticsService(context)
+    # the worker has just sent and is waiting: this entry is in no send yet
+    service._exit.set()
+    service._buffer_processing_thread.join()
+    service._exit.clear()
+    service.post_entry(make_entry('late'))
+    service.stop()
+    sent = [
+        record
+        for call in kinesis_client.put_records.call_args_list
+        for record in call.kwargs['Records']
+    ]
+    assert [record['PartitionKey'] for record in sent] == ['late']
+    assert service._buffer == []

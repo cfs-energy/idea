@@ -21,9 +21,10 @@ def test_desktop_collects_each_dcv_log_without_duplicating_system_logs(base_os):
         base_os,
         variables={'cloudwatch_agent_config': config},
     )
-    encoded = text.split(
-        "' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
-    )[0].rsplit("echo '", 1)[1]
+    # written through a quoted here-document
+    marker = "<<'IDEA_CLOUDWATCH_AGENT_CONFIG'\n"
+    start = text.index(marker) + len(marker)
+    encoded = text[start : text.index('\nIDEA_CLOUDWATCH_AGENT_CONFIG\n', start)]
     files = json.loads(encoded)['logs']['logs_collected']['files']['collect_list']
     assert files[:3] == existing
     assert len(files) == 8

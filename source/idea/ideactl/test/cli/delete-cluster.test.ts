@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { Command } from "commander";
 
@@ -15,6 +16,16 @@ import {
 
 const target = "sample-cluster";
 const region = "us-east-2";
+/** A second cluster whose name starts with the first one's. */
+const sibling = `${target}-2`;
+const LOG_GROUPS = [
+  `/${target}/vdc/dcv-host`,
+  `/aws/lambda/${target}-cluster-endpoints`,
+  `${target}-vpc-flow-logs`,
+  `/${sibling}/vdc/dcv-host`,
+  `/aws/lambda/${sibling}-cluster-endpoints`,
+  `${sibling}-vpc-flow-logs`,
+];
 
 function indexOf(trace: string[], value: string): number {
   const index = trace.indexOf(value);
@@ -165,7 +176,8 @@ function makeDeps(overrides: Partial<DeleteClusterDeps> = {}): { deps: DeleteClu
     },
     async listLogGroups(prefix) {
       trace.push(`list-logs:${prefix}`);
-      return prefix === target ? [{ name: `${target}-log`, size: 10 }] : [];
+      // DescribeLogGroups matches by name prefix, so this answers the same way
+      return LOG_GROUPS.filter((name) => name.startsWith(prefix)).map((name) => ({ name, size: 10 }));
     },
     async deleteLogGroup(name) {
       trace.push(`delete-log:${name}`);
@@ -231,7 +243,66 @@ test("runs the 13 deletion phases in order", async () => {
   assertBefore(trace, `delete-stack:${target}-bootstrap`, "empty-bucket:fixture-bucket");
   assertBefore(trace, "delete-bucket:fixture-bucket", `delete-table:${target}.cluster-settings`);
   assertBefore(trace, `delete-table:${target}.cluster-settings`, "delete-alarms:target-alarm");
-  assertBefore(trace, "delete-alarms:target-alarm", `delete-log:${target}-log`);
+  assertBefore(trace, "delete-alarms:target-alarm", `delete-log:/${target}/vdc/dcv-host`);
+});
+
+test("deletes the password secrets cluster-manager left, and only this cluster's", async () => {
+  const tags = { [CLUSTER_NAME_TAG]: target, "idea:Purpose": "password-sync" };
+  const prefix = `${target}-password-sync-`;
+  const { deps, trace } = makeDeps({
+    async listSecrets(namePrefix) {
+      trace.push(`list-secrets:${namePrefix}`);
+      return [
+        { arn: "left", name: `${prefix}1`, tags },
+        { arn: "other-cluster", name: `${prefix}2`, tags: { ...tags, [CLUSTER_NAME_TAG]: "idea-test1" } },
+        { arn: "other-purpose", name: `${prefix}3`, tags: { [CLUSTER_NAME_TAG]: target } },
+        { arn: "other-name", name: `${target}-cluster-manager-terminal-ca`, tags },
+      ];
+    },
+    async deleteSecret(arn) {
+      trace.push(`delete-secret:${arn}`);
+    },
+  });
+  await deleteCluster(deps, allOptions());
+  assert.deepEqual(trace.filter((entry) => entry.startsWith("delete-secret:")), ["delete-secret:left"]);
+  // once cluster-manager is gone, so it makes no more
+  assertBefore(trace, `delete-stack:${target}-analytics`, `list-secrets:${prefix}`);
+  assertBefore(trace, "delete-secret:left", `delete-stack:${target}-cluster`);
+});
+
+test("a password secret that cannot be deleted does not stop the cluster delete", async () => {
+  const { deps, trace } = makeDeps({
+    async listSecrets() {
+      throw Object.assign(new Error("not allowed on arn:aws:secretsmanager:secret"), { name: "AccessDeniedException" });
+    },
+    async deleteSecret() {},
+  });
+  await deleteCluster(deps, allOptions());
+  assert.ok(trace.includes(`err:failed to list password secrets named ${target}-password-sync-*: AccessDeniedException`));
+  assert.ok(trace.includes(`delete-stack:${target}-cluster`));
+});
+
+test("one password secret that cannot be deleted does not keep the others", async () => {
+  const tags = { [CLUSTER_NAME_TAG]: target, "idea:Purpose": "password-sync" };
+  const { deps, trace } = makeDeps({
+    async listSecrets() {
+      return ["stuck", "left"].map((arn) => ({ arn, name: `${target}-password-sync-${arn}`, tags }));
+    },
+    async deleteSecret(arn) {
+      if (arn === "stuck") throw Object.assign(new Error("not allowed on arn:aws:secretsmanager:secret"), { name: "AccessDeniedException" });
+      trace.push(`delete-secret:${arn}`);
+    },
+  });
+  await deleteCluster(deps, allOptions());
+  assert.ok(trace.includes("delete-secret:left"));
+  assert.ok(trace.includes(`err:failed to delete password secret ${target}-password-sync-stuck: AccessDeniedException`));
+});
+
+test("the delete policy lets the operator find and delete the password secrets", () => {
+  const policy = readFileSync(new URL("../../resources/installer_policies/idea-admin-delete-policy.yml", import.meta.url), "utf8");
+  for (const action of ["secretsmanager:ListSecrets", "secretsmanager:DeleteSecret"]) {
+    assert.match(policy, new RegExp(`^      - ${action}$`, "m"));
+  }
 });
 
 test("refuses cluster deletion without confirmation before any destructive operation", async () => {
@@ -286,6 +357,56 @@ test("clears only the target identity pool protection before its stack is delete
   assert.ok(trace.includes("disable-pool-protection:pool-target"));
   assert.equal(trace.includes("disable-pool-protection:pool-foreign"), false);
   assertBefore(trace, "disable-pool-protection:pool-target", `delete-stack:${target}-identity-provider`);
+});
+
+test("deletes only this cluster's log groups when another cluster's name starts with its own", async () => {
+  const { deps, trace } = makeDeps({
+    async listTables() {
+      return { tableNames: [`${target}.cluster-settings`, `${sibling}.cluster-settings`] };
+    },
+  });
+  await deleteCluster(deps, { ...allOptions(), force: false });
+  const deleted = trace.filter((entry) => entry.startsWith("delete-log:")).map((entry) => entry.slice("delete-log:".length));
+  assert.deepEqual(deleted, [`/${target}/vdc/dcv-host`, `/aws/lambda/${target}-cluster-endpoints`, `${target}-vpc-flow-logs`]);
+  // the operator sees every group before agreeing to delete them
+  const prompt = trace.findIndex((entry) => entry.startsWith("prompt:Are you sure you want to delete all cloudwatch logs"));
+  for (const name of deleted) assert.ok(indexOf(trace, `out:  ${name}`) < prompt, `${name} is listed before the prompt`);
+});
+
+test("leaves the Lambda interfaces of a cluster whose name starts with this one's", async () => {
+  const { deps, trace } = makeDeps({
+    async listTables() {
+      return { tableNames: [`${target}.cluster-settings`, `${sibling}.cluster-settings`] };
+    },
+    async describeLambdaNetworkInterfaces() {
+      return [
+        { networkInterfaceId: "eni-target", description: `AWS Lambda VPC ENI-${target}-cluster-endpoints-0000` },
+        { networkInterfaceId: "eni-sibling", description: `AWS Lambda VPC ENI-${sibling}-cluster-endpoints-0000` },
+      ];
+    },
+  });
+  await deleteCluster(deps, { clusterName: target, awsRegion: region, force: true });
+  assert.ok(trace.includes("delete-eni:eni-target"));
+  assert.equal(trace.includes("delete-eni:eni-sibling"), false);
+});
+
+test("skips both Lambda sweeps when a page of the other-cluster listing fails", async () => {
+  const { deps, trace } = makeDeps({
+    async listTables(nextTableName) {
+      if (nextTableName === "page-2") throw Object.assign(new Error("rate exceeded"), { name: "ThrottlingException" });
+      return { tableNames: [`${target}.cluster-settings`], nextTableName: "page-2" };
+    },
+    async describeLambdaNetworkInterfaces() {
+      return [{ networkInterfaceId: "eni-target", description: `AWS Lambda VPC ENI-${target}-cluster-endpoints-0000` }];
+    },
+  });
+  await deleteCluster(deps, { ...allOptions(), deleteDatabases: false, force: true });
+  assert.equal(trace.some((entry) => entry.startsWith("delete-eni:")), false);
+  assert.equal(trace.some((entry) => entry.startsWith("delete-log:/aws/lambda/")), false);
+  // the cluster's own tree is still removed, and the operator is told what was left
+  assert.ok(trace.includes(`delete-log:/${target}/vdc/dcv-host`));
+  assert.ok(trace.some((entry) => entry.startsWith("err:skipped deleting available Lambda network interfaces")));
+  assert.ok(trace.some((entry) => entry.startsWith(`err:skipped deleting /aws/lambda/${target}-* log groups`)));
 });
 
 test("retries a failed analytics stack after deleting its available Lambda ENIs", async () => {

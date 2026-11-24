@@ -41,11 +41,32 @@ function Install-AMDGpuDrivers {
             Write-ToLog -Message "Downloading AMD Drivers"
             $env:Path += ";C:\Program Files\Amazon\AWSCLIV2\"
             aws s3 cp --region $bucketRegion --quiet {{ context.config.get_string('global-settings.gpu_settings.amd.windows.s3_bucket_path', required=True) }} "C:\IDEA\Assets\" --recursive --exclude "*" --include "$keyPrefix*"
-            $localFile = (Get-ChildItem "C:\IDEA\Assets\$keyPrefix*").Name
+            # aws s3 cp with no matching key exits 0 and copies nothing. These checks warn rather
+            # than stop: which archives the bucket holds and the exit codes pnputil returns for
+            # this package have not been confirmed on a host, so the bootstrap goes on and the
+            # log says what is missing.
+            $localFiles = @(Get-ChildItem "C:\IDEA\Assets\$keyPrefix*" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+            if ($localFiles.Count -eq 0) {
+                Write-ToLog -Message "No AMD driver archive matching ${keyPrefix} was copied to C:\IDEA\Assets; AMD drivers are not installed" -Level 'Warn'
+                return
+            }
+            if ($localFiles.Count -gt 1) {
+                Write-ToLog -Message "Found $($localFiles.Count) AMD driver archives matching ${keyPrefix}; using the newest, $($localFiles[0].Name)" -Level 'Warn'
+            }
             Write-ToLog -Message "Extracting AMD drivers"
-            Expand-Archive "C:\IDEA\Assets\${localFile}" -DestinationPath "C:\IDEA\Assets\${installerFolderPrefix}\$keyPrefix" -Verbose
+            try {
+                Expand-Archive $localFiles[0].FullName -DestinationPath "C:\IDEA\Assets\${installerFolderPrefix}\$keyPrefix" -Force -ErrorAction Stop
+            } catch {
+                Write-ToLog -Message "Extracting $($localFiles[0].Name) failed: $($_.Exception.Message); AMD drivers are not installed" -Level 'Warn'
+                return
+            }
             pnputil /add-driver C:\IDEA\Assets\${installerFolderPrefix}\*.inf /install /subdirs
-            Write-ToLog -Message "AMD Grid driver installed, reboot will be done at the end of the bootstrap sequence"
+            $pnputilExit = $LASTEXITCODE
+            if (Get-PnpDevice -Class "Display" | Where-Object { $_.FriendlyName -like "*AMD*" }) {
+                Write-ToLog -Message "AMD Grid driver installed (pnputil exit code $pnputilExit), reboot will be done at the end of the bootstrap sequence"
+            } else {
+                Write-ToLog -Message "pnputil exited $pnputilExit and no AMD display device is active yet; if the display is still the basic adapter after the restart, the AMD driver did not install" -Level 'Warn'
+            }
         }
     }
 }

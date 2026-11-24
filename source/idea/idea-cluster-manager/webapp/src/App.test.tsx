@@ -58,6 +58,14 @@ describe('web portal app', () => {
             expect(localStorage.getItem('idea.terminal.height')).toBe('500');
         });
 
+        it('forgets the settings read for the person who signed out', async () => {
+            const {context, onLogout} = await mount();
+            const settings = context.getClusterSettingsService();
+            settings.moduleSettings['virtual-desktop-controller'] = {marker: 'previous person'};
+            act(() => {void onLogout();});
+            expect(settings.moduleSettings).toEqual({});
+        });
+
         it('starts a new sign-in with the dock closed', async () => {
             const {context, onLogin} = await mount();
             vi.spyOn(context.getClusterSettingsService(), 'initialize').mockResolvedValue(undefined as any);

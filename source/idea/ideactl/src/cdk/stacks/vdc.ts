@@ -22,6 +22,7 @@
  *   part of the deployed template.
  */
 
+import { checkSiteHookSettings, HOST_SITE_HOOK_KEYS } from '../site-hook.ts';
 import { Aws, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -38,6 +39,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 import { ArnBuilder } from '../../config/arn-builder.ts';
 import type { ClusterConfig } from '../../config/cluster-config.ts';
+import { isEmpty } from '../../config/cluster-config.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
@@ -64,6 +66,7 @@ import {
   buildEc2Service,
   buildExecutionRole,
   buildTaskDefinition,
+  buildManagedOnlyTaskRole,
   buildTaskRole,
   commonEnvironment,
   CONTAINER_STOP_SECONDS,
@@ -90,6 +93,7 @@ import {
   lookupEc2StateChangeTopic
 } from '../constructs/existing-resources.ts';
 import {
+  admitToOpenSearch,
   VirtualDesktopBastionAccessSecurityGroup,
   VirtualDesktopBrokerSecurityGroup,
   VirtualDesktopPublicLoadBalancerAccessSecurityGroup,
@@ -158,7 +162,11 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
 
   dcvHostSecurityGroup!: VirtualDesktopBastionAccessSecurityGroup;
   controllerSecurityGroup!: VirtualDesktopPublicLoadBalancerAccessSecurityGroup;
+  /** The rule that admits the controller to OpenSearch, when the cluster has analytics. */
+  openSearchIngress: ec2.CfnSecurityGroupIngress | undefined;
   dcvConnectionGatewaySecurityGroup!: VirtualDesktopPublicLoadBalancerAccessSecurityGroup;
+  /** The broker listener rules for the controller and the gateway, built with the gateway. */
+  brokerListenerRules: ec2.CfnSecurityGroupIngress[] = [];
   dcvBrokerSecurityGroup!: VirtualDesktopBrokerSecurityGroup;
 
   dcvConnectionGatewaySelfSignedCert: CustomResource | undefined;
@@ -194,6 +202,8 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     });
 
     const config = this.context.config;
+    // the host hooks' checksums are read by the desktop and bake bootstraps; refuse a bad one here
+    checkSiteHookSettings(config, this.stack, HOST_SITE_HOOK_KEYS['virtual-desktop-controller']);
     this.brokerClientCommunicationPort = requiredInt(
       config,
       'virtual-desktop-controller.dcv_broker.client_communication_port',
@@ -328,6 +338,50 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     this.dcvBrokerService = this.buildDcvBrokerService();
   }
 
+  /**
+   * An administrator's project move (VirtualDesktopAdmin.MoveSessionToProject): the desktop's
+   * instance profile becomes its new project's, and the instance and its volumes get the
+   * project's tags. Granted whether or not Bedrock is on. A managed policy, because the
+   * controller's inline policies are at IAM's size limit.
+   */
+  private desktopMovePolicy(): iam.ManagedPolicy {
+    const instances = `arn:${Aws.PARTITION}:ec2:${Aws.REGION}:${Aws.ACCOUNT_ID}:instance/*`;
+    const policy = new iam.ManagedPolicy(this.stack, 'controller-desktop-move-policy', {
+      description: 'Desktop controller: move a desktop to another project',
+      statements: [
+        new iam.PolicyStatement({ sid: 'ReadInstanceProfileAssociations', actions: ['ec2:DescribeIamInstanceProfileAssociations'], resources: ['*'] }),
+        new iam.PolicyStatement({
+          sid: 'ChangeDesktopInstanceProfile',
+          actions: ['ec2:AssociateIamInstanceProfile', 'ec2:ReplaceIamInstanceProfileAssociation', 'ec2:DisassociateIamInstanceProfile'],
+          resources: [instances],
+          conditions: { StringEquals: { 'aws:ResourceTag/idea:ClusterName': this.clusterName, 'aws:ResourceTag/idea:NodeType': 'virtual-desktop-dcv-host' } },
+        }),
+        // project roles of this cluster only, passed only to ec2 (the shared host role is granted with the role)
+        new iam.PolicyStatement({
+          sid: 'PassProjectRoles',
+          actions: ['iam:PassRole'],
+          resources: [this.arnBuilder.getProjectRoleArn()],
+          conditions: { StringEquals: { 'iam:PassedToService': `ec2.${Aws.URL_SUFFIX}` } },
+        }),
+        // volumes carry this cluster's name from the host's own tagging (tag_ebs_volumes); project
+        // tags only, the identity tags stay launch-only
+        new iam.PolicyStatement({
+          sid: 'TagMovedDesktopVolumes',
+          actions: ['ec2:CreateTags', 'ec2:DeleteTags'],
+          resources: [`arn:${Aws.PARTITION}:ec2:${Aws.REGION}:${Aws.ACCOUNT_ID}:volume/*`],
+          conditions: {
+            StringEquals: { 'aws:ResourceTag/idea:ClusterName': this.clusterName },
+            'ForAllValues:StringNotEquals': { 'aws:TagKeys': ['idea:ClusterName', 'idea:NodeType', 'idea:ModuleId', 'idea:BackupPlan'] },
+            // ForAllValues holds for a request with no keys, which for DeleteTags removes every tag
+            Null: { 'aws:TagKeys': 'false' },
+          },
+        }),
+      ],
+    });
+    this.addNagSuppression([{ rule_id: "AwsSolutions-IAM5", reason: "Instance and volume wildcards are scoped by the cluster tag conditions." }], policy);
+    return policy;
+  }
+
   private buildControllerService(): ecs.Ec2Service {
     const scope = this.containerScope;
     const sizing = roleSizing(scope, 'vdc');
@@ -340,6 +394,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       policyTemplateName: 'virtual-desktop-controller.yml',
     });
     this.controllerTaskRole = taskRole;
+    taskRole.addManagedPolicy(this.desktopMovePolicy());
     const executionRole = buildExecutionRole(
       scope,
       'controller-task-execution-role',
@@ -350,7 +405,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       taskRole,
     });
     const logGroupName = `/${this.clusterName}/${this.moduleId}/controller`;
+    const internalCertificate = this.internalAlbCertificate(executionRole, 'controller');
     const container = taskDefinition.addContainer('controller-container', {
+      secrets: { IDEA_INTERNAL_ALB_CERTIFICATE_PEM: internalCertificate },
       ...applicationContainerSettings('vdc'),
       cpu: sizing.cpu,
       dockerLabels: dockerLabels(scope, 'vdc'),
@@ -364,7 +421,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       memoryLimitMiB: sizing.memory,
     });
     container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
-    addStorageMounts(scope, taskDefinition, container);
+    addStorageMounts(scope, taskDefinition, container, "virtual-desktop-controller");
     attachApplicationFileLogs(scope, { idPrefix: 'controller', logGroupName, taskDefinition, container });
 
     const service = buildEc2Service(scope, {
@@ -448,7 +505,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       readOnly: false,
       sourceVolume: 'broker-logs',
     });
-    addStorageMounts(scope, taskDefinition, container);
+    addStorageMounts(scope, taskDefinition, container, "virtual-desktop-controller");
     addLogTailContainer(scope, taskDefinition, {
       containerId: 'dcv-broker-file-logs',
       directories: [BROKER_LOG_DIRECTORY],
@@ -848,6 +905,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       this.cluster.vpc,
       {
         bastionHostSecurityGroup: this.clusterSecurityGroup('bastion-host'),
+        internalLoadBalancerSecurityGroup: this.clusterSecurityGroup('internal-load-balancer'),
         publicLoadbalancerSecurityGroup: this.clusterSecurityGroup('external-load-balancer'),
         description: 'Security Group for Virtual Desktop DCV Broker',
         componentName: 'DCV Broker',
@@ -898,6 +956,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
     this.removeBastionHostIngressRule(this.controllerSecurityGroup);
+    this.openSearchIngress = admitToOpenSearch(this.context, this.stack, this.controllerSecurityGroup, 'the desktop controller');
 
     this.buildControllerTargetGroups();
     const externalTargetGroupArn = (this.controllerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn;
@@ -1010,6 +1069,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         port: 8443,
         protocol,
         targetType: elbv2.TargetType.IP,
+        // The gateway group admits internet clients by the cluster prefix lists, so it has to see
+        // their address rather than the load balancer's, which the VPC rule admits.
+        // shortcut: TCP only; a TCP_UDP group is left at the load balancer default, prove on a QUIC cluster before setting it there.
+        ...(protocol === elbv2.Protocol.TCP ? { preserveClientIp: true } : {}),
         vpc: this.cluster.vpc,
         targetGroupName: this.getTargetGroupName(`gw-ecs-${tgSuffix}`),
         healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP, interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
@@ -1042,6 +1105,21 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       'Allow all Traffic access from Cluster Prefix List to DCV Connection Gateway',
     );
 
+    // The target group sees client addresses, so a desktop or host in a private subnet that opens
+    // a session through the public load balancer arrives from a NAT gateway's address. The portal's
+    // public load balancer admits the same addresses (ExternalLoadBalancerSecurityGroup).
+    // shortcut: an existing VPC publishes no NAT addresses, as for the portal; add them to a prefix list there.
+    for (const address of config.getList<string>('cluster.network.nat_gateway_ips', [])) {
+      if (isEmpty(address)) continue;
+      for (const port of quicSupported ? [ec2.Port.tcp(8443), ec2.Port.udp(8443)] : [ec2.Port.tcp(8443)]) {
+        this.dcvConnectionGatewaySecurityGroup.addIngressRule(
+          ec2.Peer.ipv4(`${address}/32`),
+          port,
+          'Allow the cluster NAT gateways to DCV Connection Gateway',
+        );
+      }
+    }
+
     for (const prefixListId of config.getList<string>('cluster.network.prefix_list_ids', [])) {
       this.dcvConnectionGatewaySecurityGroup.addIngressRule(
         ec2.Peer.prefixList(prefixListId),
@@ -1050,8 +1128,44 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       );
     }
 
+    this.brokerListenerRules = this.admitToBrokerListeners();
     this.buildDcvConnectionGatewayService(dcvConnectionGatewayTargetGroup);
 
+  }
+
+  /**
+   * The internal load balancer's broker client and gateway listeners admit only the controller and
+   * the gateway. The rules live here, with the groups they name. Their ids are published as
+   * `dcv_broker.listener_ingress_rules`, which the cluster stack waits for before it drops its
+   * VPC-wide rule (`brokerListenerRulesDeployed` in cluster.ts).
+   */
+  private admitToBrokerListeners(): ec2.CfnSecurityGroupIngress[] {
+    const internalLoadBalancerGroupId = this.clusterSecurityGroup('internal-load-balancer').securityGroupId;
+    return ([
+      ['broker-client-listener-ingress', this.controllerSecurityGroup, this.brokerClientCommunicationPort, 'the desktop controller'],
+      ['broker-gateway-listener-ingress', this.dcvConnectionGatewaySecurityGroup, this.brokerGatewayCommunicationPort, 'the DCV connection gateway'],
+    ] as const).map(([id, source, port, who]) => new ec2.CfnSecurityGroupIngress(this.stack, id, {
+      groupId: internalLoadBalancerGroupId,
+      sourceSecurityGroupId: source.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: port,
+      toPort: port,
+      description: `Allow HTTPS from ${who} to the DCV broker listener`,
+    }));
+  }
+
+  /**
+   * The internal load balancer's certificate (the self-signed one the cluster stack issues, or the
+   * operator's), handed to a task as `IDEA_INTERNAL_ALB_CERTIFICATE_PEM` so its clients can verify
+   * the broker endpoint instead of skipping verification (the controller's broker client, the
+   * gateway's resolver). The public part only; the key stays with the load balancer.
+   */
+  private internalAlbCertificate(executionRole: iam.IRole, component: string): ecs.Secret {
+    const arn = this.requiredString('cluster.load_balancers.internal_alb.certificates.certificate_secret_arn');
+    grantInjectedSecret(this.containerScope, executionRole, arn);
+    return ecs.Secret.fromSecretsManager(
+      secretsmanager.Secret.fromSecretCompleteArn(this.stack, `${component}-internal-alb-certificate-secret`, arn),
+    );
   }
 
   /**
@@ -1081,13 +1195,14 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
    */
   private buildDcvConnectionGatewayService(targetGroup: elbv2.NetworkTargetGroup): void {
     const scope = this.containerScope;
-    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
+    // The role script and the gateway binary call no AWS API: the certificate pair is injected by
+    // the execution role, which also writes the logs.
+    const taskRole = buildManagedOnlyTaskRole(scope, {
       constructId: 'dcv-connection-gateway-task-role',
       name: `${this.moduleId}-${COMPONENT_DCV_CONNECTION_GATEWAY}-task-role`,
       description: `IAM role assigned to the virtual-desktop-${COMPONENT_DCV_CONNECTION_GATEWAY} task`,
-      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
-      policyConstructId: `${this.clusterName}-${this.moduleId}-${COMPONENT_DCV_CONNECTION_GATEWAY}-task-policy`,
-      policyTemplateName: 'virtual-desktop-dcv-connection-gateway.yml',
+      // no instance managed policies: command sessions use the policy CDK writes for them
+      managedPolicyArns: [],
     });
     const executionRole = buildExecutionRole(
       scope,
@@ -1105,6 +1220,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     const certificateSecrets = this.dcvConnectionGatewayCertificateSecretArns();
     grantInjectedSecret(scope, executionRole, certificateSecrets.certificate);
     grantInjectedSecret(scope, executionRole, certificateSecrets.privateKey);
+    const internalCertificate = this.internalAlbCertificate(executionRole, 'dcv-connection-gateway');
     const container = taskDefinition.addContainer('dcv-connection-gateway-container', {
       ...applicationContainerSettings('dcv-gateway'),
       cpu: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.cpu'),
@@ -1131,6 +1247,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
             certificateSecrets.certificate,
           ),
         ),
+        IDEA_INTERNAL_ALB_CERTIFICATE_PEM: internalCertificate,
         DCV_GATEWAY_KEY_PEM: ecs.Secret.fromSecretsManager(
           secretsmanager.Secret.fromSecretCompleteArn(
             this.stack,
@@ -1170,7 +1287,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       desiredCount: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.desired'),
       securityGroups: [this.dcvConnectionGatewaySecurityGroup],
       healthCheckGracePeriod: healthCheckGrace('dcv-gateway'),
-      dependencies: [taskRole, taskPolicy, executionRole],
+      dependencies: [taskRole, executionRole],
     });
     // Attaching also makes the service depend on the listener, which is what gives the target
     // group its load balancer: a service may not name a target group that has none.
@@ -1257,6 +1374,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
   buildClusterSettings(): void {
     const config = this.context.config;
     const clusterSettings: Record<string, unknown> = {
+      // The service's own OpenSearch rule, written once the rule exists: an analytics upgrade that
+      // drops the VPC-wide rule checks for it (deployment-helper refuseAnalyticsAheadOfServices).
+      ...(this.openSearchIngress === undefined ? {} : { opensearch_ingress_rule: this.openSearchIngress.ref }),
       deployment_id: this.deploymentId,
       client_id: this.oauth2ClientSecret.clientId.ref,
       client_secret: this.oauth2ClientSecret.clientSecret.ref,
@@ -1283,6 +1403,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       controller_sqs_queue_url: this.controllerSqsQueue.queueUrl,
       controller_sqs_queue_arn: this.controllerSqsQueue.queueArn,
       'external_nlb.load_balancer_dns_name': this.externalNlb.loadBalancerDnsName,
+      // Written once the rules exist (the references order it after them) and removed again by a
+      // rollback, whose update carries the old settings: the cluster stack reads it as the proof
+      // that the controller and gateway hold their own way to the broker.
+      'dcv_broker.listener_ingress_rules': this.brokerListenerRules.map((rule) => rule.ref),
       // Literals under the container flag: each service has to start after this resource, because
       // its application reads its own rows from it, so this resource must not reference a service.
       'controller.asg_name': this.componentServiceName(COMPONENT_CONTROLLER),

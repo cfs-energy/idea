@@ -1,4 +1,5 @@
 # Begin: Mount Shared Storage
+{# values from cluster settings are data: single-quoted for the shell, embedded quotes escaped #}
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
     {% include '_templates/linux/fsx_lustre_client.jinja2' %}
@@ -17,11 +18,11 @@
     {% for name, storage in context.config.get_config('shared-storage').items() %}
       {% if context.eval_shared_storage_scope(shared_storage=storage) %}
         {% if storage['provider'] == 'efs' %}
-        echo "# Using Provider {{ storage['provider'] }} for {{ storage['mount_dir'] }} using options {{ storage['mount_options'] }}"
-        mkdir -p "{{ storage['mount_dir'] }}"
-        add_efs_to_fstab "{{ storage['efs']['dns'] }}" \
-                         "{{ storage['mount_dir'] }}" \
-                         "{{ storage['mount_options'] }}"
+        echo '# Using Provider' '{{ storage['provider'] | default('', true) | string | replace("'", "'\\''") }}' for '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}' using options '{{ storage['mount_options'] | default('', true) | string | replace("'", "'\\''") }}'
+        mkdir -p '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
+        add_efs_to_fstab '{{ storage['efs']['dns'] | default('', true) | string | replace("'", "'\\''") }}' \
+                         '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}' \
+                         '{{ storage['mount_options'] | default('', true) | string | replace("'", "'\\''") }}'
         {% elif storage['provider'] in ('fsx_cache', 'fsx_lustre') %}
         # Check if lustre module is loaded
         if ! grep -q lustre /proc/filesystems; then
@@ -38,26 +39,26 @@
 
         # Check if lustre module is now loaded
         if grep -q lustre /proc/filesystems; then
-          mkdir -p "{{ storage['mount_dir'] }}"
-          add_fsx_lustre_to_fstab "{{ storage[storage['provider']]['dns'] }}" \
-                                  "{{ storage['mount_dir'] }}" \
-                                  "{{ storage['mount_options'] }}" \
-                                  "{{ storage[storage['provider']]['mount_name'] }}"
+          mkdir -p '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
+          add_fsx_lustre_to_fstab '{{ storage[storage['provider']]['dns'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                  '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                  '{{ storage['mount_options'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                  '{{ storage[storage['provider']]['mount_name'] | default('', true) | string | replace("'", "'\\''") }}'
         else
-          echo "Lustre filesystem not available. Skipping mount for {{ storage['mount_dir'] }}"
+          echo 'Lustre filesystem not available. Skipping mount for' '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
         fi
         {% elif storage['provider'] == 'fsx_netapp_ontap' and storage['fsx_netapp_ontap']['volume']['security_style'] %}
-        mkdir -p "{{ storage['mount_dir'] }}"
-        add_fsx_netapp_ontap_to_fstab "{{ storage['fsx_netapp_ontap']['svm']['nfs_dns'] }}" \
-                                      "{{ storage['mount_dir'] }}" \
-                                      "{{ storage['mount_options'] }}" \
-                                      "{{ storage['fsx_netapp_ontap']['volume']['volume_path'] }}"
+        mkdir -p '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
+        add_fsx_netapp_ontap_to_fstab '{{ storage['fsx_netapp_ontap']['svm']['nfs_dns'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                      '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                      '{{ storage['mount_options'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                      '{{ storage['fsx_netapp_ontap']['volume']['volume_path'] | default('', true) | string | replace("'", "'\\''") }}'
         {% elif storage['provider'] == 'fsx_openzfs' %}
-        mkdir -p "{{ storage['mount_dir'] }}"
-        add_fsx_openzfs_to_fstab "{{ storage['fsx_openzfs']['dns'] }}" \
-                                 "{{ storage['mount_dir'] }}" \
-                                 "{{ storage['mount_options'] }}" \
-                                 "{{ storage['fsx_openzfs']['volume_path'] }}"
+        mkdir -p '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
+        add_fsx_openzfs_to_fstab '{{ storage['fsx_openzfs']['dns'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                 '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                 '{{ storage['mount_options'] | default('', true) | string | replace("'", "'\\''") }}' \
+                                 '{{ storage['fsx_openzfs']['volume_path'] | default('', true) | string | replace("'", "'\\''") }}'
         {% endif %}
       {% endif %}
     {% endfor %}
@@ -89,7 +90,12 @@
   # a plain call, so a bake records the failure by name; a host stops rather than run without its storage
   mount_shared_storage
   # shellcheck disable=SC2181
-  [[ $? -eq 0 ]] || exit_fail "Shared storage did not mount"
+  if [[ $? -ne 0 ]]; then
+    # its own status, so the scheduler and the desktop controller can tell a storage problem
+    # from an image one
+    BOOTSTRAP_DETAIL="${SHARED_STORAGE_NOT_MOUNTED}"
+    fail_bootstrap shared-storage-unavailable "Shared storage did not mount after 5 attempts: ${SHARED_STORAGE_NOT_MOUNTED:-a configured file system}. Check that the file system exists and that this host's subnet and security groups reach it."
+  fi
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
     # Lustre client tuning for some adjustments takes place _after_ the client mounts have taken place
     {% include '_templates/linux/fsx_lustre_client_tuning_postmount.jinja2' %}

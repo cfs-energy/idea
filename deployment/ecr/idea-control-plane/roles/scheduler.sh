@@ -68,9 +68,25 @@ EOF
     --change-batch file:///tmp/rr.json >/dev/null
 fi
 
-# Create the datastore only when PBS_HOME is new.
+# Create the datastore only when PBS_HOME is new. A first start that stopped before the server
+# was configured leaves CREATING behind, and the next start finishes the configuration on the
+# datastore it made. A datastore with neither file (an existing or imported one) keeps its policy.
+CREATING="${PBS_HOME}/.idea-server-creating"
+# written once pbs_habitat has returned: CREATING without it means a first start stopped inside
+# pbs_habitat and the datastore may be partial
+HABITAT_DONE="${PBS_HOME}/.idea-habitat-done"
+PBS_NEW=0
 if [[ ! -d "${PBS_HOME}/datastore" ]]; then
   log "first start: pbs_habitat will create PBS_HOME at ${PBS_HOME}"
+  PBS_NEW=1
+  PBS_CREATE=1
+  mkdir -p "${PBS_HOME}"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "${CREATING}"
+elif [[ -f "${CREATING}" && ! -f "${HABITAT_DONE}" ]]; then
+  log "an earlier first start stopped inside pbs_habitat, so the datastore in ${PBS_HOME} may be incomplete; on a new cluster, empty ${PBS_HOME} and start the scheduler again"
+  exit 1
+elif [[ -f "${CREATING}" ]]; then
+  log "an earlier first start did not finish; configuring the PBS server it created"
   PBS_CREATE=1
 else
   log "reusing existing PBS_HOME at ${PBS_HOME}"
@@ -81,8 +97,9 @@ fi
 install -d -m 755 -o postgres -g postgres /run/postgresql
 
 # Initialize PBS_HOME and its datastore.
-if [[ "${PBS_CREATE}" == 1 ]]; then
+if [[ "${PBS_NEW}" == 1 ]]; then
   /opt/pbs/libexec/pbs_habitat
+  date -u +%Y-%m-%dT%H:%M:%SZ > "${HABITAT_DONE}"
 fi
 
 # Missing settings use defaults; API errors must not silently install defaults.
@@ -167,8 +184,40 @@ printf 'PATH=/bin:/usr/bin\nIDEA_SCHEDULER_UNIX_SOCKET=/run/idea.sock\n' > "${PB
 python3.13 -m ideascheduler.app.runtime_tasks licenses "${PBS_HOME}" \
   || log "license restore failed; PBS keeps the license resources it has"
 
+# The datastore belongs to its service account. Files written while the storage forced one
+# identity on every caller are owned by that identity; giving them back here, before PostgreSQL
+# starts, keeps the datastore readable once the storage maps callers to their own ids. Only files
+# with another owner are changed, so a datastore already in order costs one directory walk.
+repair_datastore_owner() {
+  local user="${PBS_DATA_SERVICE_USER}" group count
+  group="$(id -gn "${user}")" || { log "no account ${user}; leaving datastore ownership"; return 0; }
+  [[ -d "${PBS_HOME}/datastore" ]] || return 0
+  count="$(find "${PBS_HOME}/datastore" -xdev \( ! -user "${user}" -o ! -group "${group}" \) \
+    -print -exec chown -h "${user}:${group}" {} + | wc -l)" \
+    || { log "could not give the datastore back to ${user}; PBS start will report it"; return 0; }
+  (( count == 0 )) || log "gave ${count// /} datastore files back to ${user}:${group}"
+}
+repair_datastore_owner
+
+shutdown() {
+  trap - SIGTERM SIGINT
+  log "stopping scheduler module, log archiver, user sync and pbs_sched watch"
+  # shellcheck disable=SC2086  # unset ids expand to nothing
+  kill ${IDEA_PID:-} ${ARCHIVE_PID:-} ${SYNC_PID:-} ${SCHED_WATCH_PID:-} 2>/dev/null || true
+  # shellcheck disable=SC2086
+  wait ${IDEA_PID:-} ${ARCHIVE_PID:-} ${SYNC_PID:-} ${SCHED_WATCH_PID:-} 2>/dev/null || true
+  log "SIGTERM: qterm -t quick"
+  /opt/pbs/bin/qterm -t quick || true
+  exit "${1:-0}"
+}
+# set before PBS starts, so a stop during start-up still stops the server cleanly
+trap shutdown SIGTERM SIGINT
+
 log "starting pbs daemons (create=${PBS_CREATE})"
 /opt/pbs/libexec/pbs_init.d start
+# PBS start-up can set its packaged modes again; user scripts run as their owners in this task.
+log "clearing set-id bits outside pbs_iff and sudo"
+/opt/idea/roles/setid_strip.sh /usr /opt || log "set-id strip failed; continuing"
 
 # Fail if the PBS server does not start.
 for _ in $(seq 1 30); do
@@ -190,35 +239,40 @@ if [[ "${PBS_CREATE}" == 1 ]]; then
   /opt/pbs/bin/qmgr -c "set server node_fail_requeue = ${PBS_NODE_FAIL_REQUEUE:-600}"
 fi
 
-# Ask execution hosts to refresh the scheduler address.
+# Ask execution hosts to refresh the scheduler address. The targets are the three tags the role's
+# Run Command grant requires (cluster, compute-node, this scheduler's module id), so the command
+# resolves to exactly the instances it may reach.
 if [[ -n "${IDEA_ROUTE53_ZONE_ID:-}" ]]; then
   log "asking execution hosts to re-read their configuration for the new server address"
   aws ssm send-command --region "${AWS_DEFAULT_REGION}" \
     --targets "Key=tag:idea:ClusterName,Values=${IDEA_CLUSTER_NAME}" "Key=tag:idea:NodeType,Values=compute-node" \
+      "Key=tag:idea:ModuleId,Values=${IDEA_MODULE_ID:-scheduler}" \
     --document-name AWS-RunShellScript \
     --parameters "commands=[\"resolvectl flush-caches 2>/dev/null || true\",\"for i in \$(seq 1 18); do getent hosts ${IDEA_SCHEDULER_DNS_NAME} | grep -q '^${TASK_IP} ' && break; sleep 5; done\",\"pkill -HUP -x pbs_mom || true\"]" \
     --comment "scheduler address changed to ${TASK_IP}" \
-    --query Command.CommandId --output text 2>&1 | sed "s/^/[entrypoint] ssm command: /" || true
+    --query Command.CommandId --output text 2>&1 | sed "s/^/[entrypoint] ssm command: /" \
+    || log "the refresh request failed; execution hosts pick up the address when their DNS cache expires"
 fi
 
 if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
   log "server attributes and default queue"
-  VALUE="$(setting scheduler.openpbs.server.flatuid true)"
+  VALUE="$(setting "${IDEA_MODULE_ID:-scheduler}.openpbs.server.flatuid" true)"
   /opt/pbs/bin/qmgr -c "set server flatuid = ${VALUE}"
-  VALUE="$(setting scheduler.openpbs.server.job_history_enable 1)"
+  VALUE="$(setting "${IDEA_MODULE_ID:-scheduler}.openpbs.server.job_history_enable" 1)"
   /opt/pbs/bin/qmgr -c "set server job_history_enable = ${VALUE}"
-  VALUE="$(setting scheduler.openpbs.server.job_history_duration 72:00:00)"
+  VALUE="$(setting "${IDEA_MODULE_ID:-scheduler}.openpbs.server.job_history_duration" 72:00:00)"
   /opt/pbs/bin/qmgr -c "set server job_history_duration = ${VALUE}"
-  VALUE="$(setting scheduler.openpbs.server.scheduler_iteration 30)"
+  VALUE="$(setting "${IDEA_MODULE_ID:-scheduler}.openpbs.server.scheduler_iteration" 30)"
   /opt/pbs/bin/qmgr -c "set server scheduler_iteration = ${VALUE}"
-  VALUE="$(setting scheduler.openpbs.server.max_concurrent_provision 5000)"
+  VALUE="$(setting "${IDEA_MODULE_ID:-scheduler}.openpbs.server.max_concurrent_provision" 5000)"
   /opt/pbs/bin/qmgr -c "set server max_concurrent_provision = ${VALUE}"
-  /opt/pbs/bin/qmgr -c "create queue normal"
+  /opt/pbs/bin/qmgr -c "list queue normal" >/dev/null 2>&1 || /opt/pbs/bin/qmgr -c "create queue normal"
   /opt/pbs/bin/qmgr -c "set queue normal queue_type = Execution"
   /opt/pbs/bin/qmgr -c "set queue normal started = True"
   /opt/pbs/bin/qmgr -c "set queue normal enabled = True"
   /opt/pbs/bin/qmgr -c "set server default_queue = normal"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${MARKER}"
+  rm -f "${CREATING}" "${HABITAT_DONE}"
   log "PBS server configured"
 fi
 
@@ -296,16 +350,14 @@ reconcile_managers || log "manager reconciliation failed; continuing"
 
 log "starting pbs_sched"
 /opt/pbs/sbin/pbs_sched
-
-shutdown() {
-  trap - SIGTERM SIGINT
-  log "stopping scheduler module, log archiver and user sync"
-  kill "${IDEA_PID}" "${ARCHIVE_PID}" "${SYNC_PID}" 2>/dev/null || true
-  wait "${IDEA_PID}" "${ARCHIVE_PID}" "${SYNC_PID}" 2>/dev/null || true
-  log "SIGTERM: qterm -t quick"
-  /opt/pbs/bin/qterm -t quick || true
-  exit "${1:-0}"
+# pbs_sched daemonizes, so wait -n cannot see it exit; without it jobs stay queued while the
+# server and the module answer the health check.
+watch_pbs_sched() {
+  while pgrep -x pbs_sched >/dev/null; do sleep "${IDEA_SCHED_WATCH_INTERVAL:-30}"; done
+  log "pbs_sched is not running"
 }
+watch_pbs_sched &
+SCHED_WATCH_PID=$!
 
 # Synchronize cluster users before starting the scheduler module. The sync itself defers a fresh
 # cluster's not-yet-created tables to its background pass and fails on anything else.
@@ -327,8 +379,7 @@ ARCHIVE_PID=$!
 log "starting scheduler module"
 python3.13 -c "import sys; sys.argv=['ideaserver']; from ideascheduler.app.app_main import main; sys.exit(main())" &
 IDEA_PID=$!
-trap shutdown SIGTERM SIGINT
 # Any supervised process exiting unexpectedly must replace this task.
-wait -n "${IDEA_PID}" "${ARCHIVE_PID}" "${SYNC_PID}" || true
+wait -n "${IDEA_PID}" "${ARCHIVE_PID}" "${SYNC_PID}" "${SCHED_WATCH_PID}" || true
 log "a scheduler process exited unexpectedly"
 shutdown 1

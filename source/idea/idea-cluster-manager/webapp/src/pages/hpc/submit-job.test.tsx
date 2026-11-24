@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
-import SubmitJob from './submit-job';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+import SubmitJob, {NoApplications} from './submit-job';
 import { HpcApplication } from '../../client/data-model';
 import IdeaException from '../../common/exceptions';
 import { initTestAppContext } from '../../test-support';
@@ -32,11 +32,10 @@ const INSTANCE_TYPE_OPTIONS = {
     instance_types: [{ name: 'c5.large', default_core_count: 1, threads_per_core: 2 }]
 };
 
-function renderSubmitJob(props: any = {}) {
+function renderSubmitJob(props: any = {}, state = btoa(JSON.stringify({ applicationId: APPLICATION.application_id }))) {
     // the page loads its application from ?state=, as the application catalog links do
-    const state = btoa(JSON.stringify({ applicationId: APPLICATION.application_id }));
     render(
-        <MemoryRouter initialEntries={[`/?state=${state}`]}>
+        <MemoryRouter initialEntries={[`/?state=${encodeURIComponent(state)}`]}>
             <SubmitJob
                 ideaPageId="submit-job"
                 toolsOpen={false}
@@ -57,6 +56,96 @@ function renderSubmitJob(props: any = {}) {
 describe('submit job page', () => {
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('keeps a password field out of the address it saves', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        const withPassword = {...APPLICATION, form_template: {sections: [{name: 'job-params', params: [
+            ...APPLICATION.form_template!.sections![0].params!,
+            {name: 'license_key', title: 'License Key', param_type: 'password', data_type: 'str', default: 'marker-secret'},
+        ]}]}};
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [withPassword]} as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const submit = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({accepted: true, job: {}} as any);
+        let search = '';
+        const Probe = () => {search = useLocation().search; return null;};
+        render(
+            <MemoryRouter initialEntries={[`/?state=${encodeURIComponent(btoa(JSON.stringify({applicationId: APPLICATION.application_id})))}`]}>
+                <SubmitJob ideaPageId="submit-job" toolsOpen={false} tools={null} onToolsChange={() => {}} onPageChange={() => {}}
+                           sideNavHeader={{text: 'IDEA', href: '#/'}} sideNavItems={[]} onSideNavChange={() => {}} onFlashbarChange={() => {}} flashbarItems={[]}/>
+                <Probe/>
+            </MemoryRouter>
+        );
+        await screen.findByText('License Key');
+        const user = userEvent.setup();
+        const button = (await screen.findAllByRole('button', {name: /^Submit Job$/}))[0];
+        await waitFor(() => expect(button).not.toBeDisabled());
+        await user.click(button);
+        await waitFor(() => expect(submit).toHaveBeenCalled());
+        const saved = () => JSON.parse(atob(new URLSearchParams(search).get('state')!));
+        await waitFor(() => expect(saved().params?.job_name).toBe('test-job'));
+        expect(saved().params).not.toHaveProperty('license_key');
+        expect(search).not.toContain(btoa('marker-secret').slice(0, 8));
+    });
+
+    it('saves a template with the inputs typed, before any preview', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        const withPassword = {...APPLICATION, form_template: {sections: [{name: 'job-params', params: [
+            ...APPLICATION.form_template!.sections![0].params!,
+            {name: 'license_key', title: 'License Key', param_type: 'password', data_type: 'str', default: 'marker-secret'},
+        ]}]}};
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [withPassword]} as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const create = vi.spyOn(context.jobTemplates(), 'createJobTemplate').mockResolvedValue({} as any);
+        renderSubmitJob();
+        await screen.findByText('License Key');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', {name: /Job Templates/}));
+        await user.click(await screen.findByText('Save Job Template'));
+        const dialog = within(await screen.findByRole('dialog', {name: /Save Job Template/}));
+        const [title, description] = dialog.getAllByRole('textbox');
+        await user.type(title, 'marker template');
+        await user.type(description, 'marker');
+        const buttons = dialog.getAllByRole('button').filter(button => /^(Save|Submit|Save Job Template)$/.test(button.textContent ?? ''));
+        await user.click(buttons[buttons.length - 1]);
+        await waitFor(() => expect(create).toHaveBeenCalled());
+        const saved = JSON.parse(atob(create.mock.calls[0][0].template_data));
+        expect(saved.params.job_name).toBe('test-job');
+        expect(saved.params).not.toHaveProperty('license_key');
+    });
+
+    describe('a restored submission', () => {
+        const TWO_PROJECTS = {...APPLICATION, projects: [{project_id: 'p-1', name: 'proj-1', title: 'Project 1'}, {project_id: 'p-2', name: 'proj-2', title: 'Project 2'}]};
+        const restore = async (project?: string) => {
+            const context = initTestAppContext();
+            const scheduler = context.client().scheduler();
+            vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [TWO_PROJECTS]} as any);
+            vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+            const submit = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({accepted: true, job: {}} as any);
+            renderSubmitJob({}, btoa(JSON.stringify({applicationId: APPLICATION.application_id, project})));
+            await screen.findByText('Job Name');
+            return submit;
+        };
+
+        it('selects the project it was saved under', async () => {
+            const submit = await restore('proj-2');
+            expect(await screen.findByText('Project 2')).toBeInTheDocument();
+            expect(screen.queryByText('Project 1')).not.toBeInTheDocument();
+            const user = userEvent.setup();
+            const button = (await screen.findAllByRole('button', {name: /^Submit Job$/}))[0];
+            await waitFor(() => expect(button).not.toBeDisabled());
+            await user.click(button);
+            await waitFor(() => expect(submit).toHaveBeenCalled());
+            expect(submit.mock.calls[0][0].project).toBe('proj-2');
+        });
+
+        it('selects no project when the saved one is no longer offered', async () => {
+            const submit = await restore('proj-gone');
+            await waitFor(() => expect(screen.queryByText('Project 1')).not.toBeInTheDocument());
+            expect(submit).not.toHaveBeenCalled();
+        });
     });
 
     it('renders the submit job form', async () => {
@@ -106,6 +195,41 @@ describe('submit job page', () => {
 
         expect(await screen.findByText('Job Submission Failed')).toBeInTheDocument();
         expect(await screen.findByText(/qsub: Queue is not enabled/)).toBeInTheDocument();
+    });
+
+    // the scheduler decodes job_script as UTF-8, and btoa threw on the curly apostrophe before submitting
+    it('submits a parameter with non-ASCII text as UTF-8', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({
+            applications: [{ ...APPLICATION, job_script_template: APPLICATION.job_script_template + '# %job_name%\n' }]
+        } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const submitJob = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({ accepted: true } as any);
+
+        const user = userEvent.setup();
+        // JSON escapes keep the state ASCII, so the test can build it with btoa
+        renderSubmitJob({}, btoa('{"applicationId": "app-1", "params": {"job_name": "Bob\\u2019s caf\\u00e9 run"}}'));
+
+        await screen.findByText('Job Name');
+        const submitButton = (await screen.findAllByRole('button', { name: /^Submit Job$/ }))[0];
+        await waitFor(() => expect(submitButton).not.toBeDisabled());
+        await user.click(submitButton);
+
+        await waitFor(() => expect(submitJob).toHaveBeenCalledTimes(1));
+        const bytes = Uint8Array.from(atob(submitJob.mock.calls[0][0].job_script!), (char) => char.charCodeAt(0));
+        expect(new TextDecoder('utf-8', {fatal: true}).decode(bytes)).toContain('# Bob\u2019s café run\n');
+    });
+
+    // templates saved by earlier releases hold é as one Latin-1 byte
+    it('reads a saved state with Latin-1 text', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({ applications: [APPLICATION] } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        renderSubmitJob({}, btoa(JSON.stringify({ applicationId: APPLICATION.application_id, params: { job_name: 'café' } })));
+
+        expect(await screen.findByDisplayValue('café')).toBeInTheDocument();
     });
 
     it('confirms a large job before submitting it', async () => {
@@ -202,6 +326,81 @@ describe('submit job page', () => {
         await user.click(submit);
         expect(await screen.findByText('Requested instances run arm64, but the image is x86_64.')).toBeInTheDocument();
         expect(screen.queryByText('Job Submitted Successfully')).toBeNull();
+    });
+
+    async function submitWithResult(result: any) {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({ applications: [APPLICATION] } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        vi.spyOn(scheduler, 'submitJob').mockResolvedValue(result);
+        const user = userEvent.setup();
+        renderSubmitJob();
+        await screen.findByText('Job Name');
+        const dryRun = await screen.findByRole('button', { name: /Dry Run/i });
+        await waitFor(() => expect(dryRun).not.toBeDisabled());
+        await user.click(dryRun);
+        return user;
+    }
+
+    const PRICED = {line_items: [{title: 'c5.large', quantity: 1, unit: 'per hour', unit_price: {amount: 0.1, unit: 'USD'}, total_price: {amount: 0.1, unit: 'USD'}}], line_items_total: {amount: 0.1, unit: 'USD'}};
+    const UNPRICED = {price_unavailable: true, line_items: [{title: 'c5.large', quantity: 1, unit: 'per hour', unit_price: {amount: 0, unit: 'USD'}, total_price: {amount: 0, unit: 'USD'}}], line_items_total: {amount: 0, unit: 'USD'}};
+    const BUDGET = {budget_name: 'fusion', budget_limit: {amount: 1000, unit: 'USD'}, actual_spend: {amount: 200, unit: 'USD'}, forecasted_spend: {amount: 300, unit: 'USD'}, job_usage_dollars: {amount: 0, unit: 'USD'}, job_usage_percent: 0, job_usage_percent_with_savings: 0};
+
+    it('labels the estimate as the whole job, not an hourly rate', async () => {
+        const user = await submitWithResult({accepted: true, job: {job_id: '101'}, estimated_bom_cost: PRICED});
+        await user.click(await screen.findByRole('tab', {name: /Cost/}));
+        expect(await screen.findByText('Estimated total for the requested walltime (1 hour if none set)')).toBeInTheDocument();
+        expect(screen.queryByText(/Per Hour/)).toBeNull();
+    });
+
+    it('shows an unknown price as not available, never as $0', async () => {
+        const user = await submitWithResult({accepted: true, job: {job_id: '101'}, estimated_bom_cost: UNPRICED, budget_usage: BUDGET});
+        await user.click(await screen.findByRole('tab', {name: /Cost/}));
+        expect(await screen.findByText('Price not available')).toBeInTheDocument();
+        expect(screen.queryByText(/\$0/)).toBeNull();
+        await user.click(await screen.findByRole('tab', {name: /Budget/}));
+        expect(await screen.findByText("Budget impact can't be calculated without a price.")).toBeInTheDocument();
+    });
+
+    it('lists a refusal in words, without error codes', async () => {
+        const user = await submitWithResult({
+            accepted: false,
+            validations: {results: [{error_code: 'instance_ami', message: 'Remove instance_ami to use the queue default.'}]},
+            incidentals: {results: [{error_code: 'Licenses.NotFound', message: 'License comsol is not set up on this cluster.'}]}
+        });
+        void user;
+        expect(await screen.findByText("This job can't be queued:")).toBeInTheDocument();
+        expect(screen.getByText('Remove instance_ami to use the queue default.')).toBeInTheDocument();
+        expect(screen.getByText('License comsol is not set up on this cluster.')).toBeInTheDocument();
+        expect(screen.queryByText('Licenses.NotFound')).toBeNull();
+        expect(screen.queryByText('Error Code')).toBeNull();
+    });
+
+    // the scheduler sanitizes the job name and picks the mount and extension, so the page opens
+    // the path it was given and never one rebuilt from the job.
+    it('opens the script the scheduler kept in the script workbench', async () => {
+        const path = '/shared/home/alice/jobs/r_d_run_uid1.que';
+        const user = await submitWithResult({dry_run: 'true', accepted: false, job: {name: 'r&d run', job_uid: 'uid1', owner: 'alice'}, job_script_path: path});
+        await user.click(await screen.findByRole('tab', {name: 'Job Script'}));
+        expect(await screen.findByRole('link', {name: 'Open in Script Workbench'}))
+            .toHaveAttribute('href', `#/home/script-workbench?file=${encodeURIComponent(path)}`);
+    });
+
+    it('offers no script to open when the scheduler kept none', async () => {
+        const user = await submitWithResult({dry_run: 'true', accepted: false, job: {name: 'test-job', job_uid: 'uid1', owner: 'alice'}});
+        await user.click(await screen.findByRole('tab', {name: 'Job Script'}));
+        expect(await screen.findByText('PBS Job Script')).toBeInTheDocument();
+        expect(screen.queryByText('Open in Script Workbench')).toBeNull();
+        expect(screen.queryByText(/opening it in the Script Workbench/)).toBeNull();
+    });
+
+    it('offers a way forward when no application is available', async () => {
+        const navigate = vi.fn();
+        render(<NoApplications navigate={navigate}/>);
+        expect(screen.getByText('No applications are available for your projects. Ask an administrator to add you to a project, or write your own job script.')).toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', {name: 'Write script'}));
+        expect(navigate).toHaveBeenCalledWith('/home/script-workbench');
     });
 
     // a hung scheduler api answers with a timeout rather than an application listing. reported

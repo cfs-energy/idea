@@ -18,6 +18,11 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
+{# on every pass: the GPU driver stage below can install a kernel and reboot into it #}
+{% with lustre_kernel = '$(uname -r)' %}
+{% include 'compute-node-ami-builder/_templates/lustre_kernel_check.jinja2' %}
+{% endwith %}
+
 {% with node_type = 'compute' %}
   {% include '_templates/linux/gpu_drivers.jinja2' %}
 {% endwith %}
@@ -25,21 +30,25 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 # a reboot may be required if GPU Drivers are installed.
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
+  # the bake continues in this script after the reboot: register it once
+  (crontab -l 2>/dev/null | grep -v compute_node_ami_builder_post_reboot.sh || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_ami_builder_post_reboot.sh >> ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}/compute_node_ami_builder_bootstrap.log 2>&1") | crontab -
   reboot_after_cloud_init
   exit 0
 else
+  # no reboot now, but every clone boots whatever is the default
+  ensure_boot_kernel_bootable
 
   # user data customizations
-  if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
-    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh >> ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1 || exit 1
-  else
-    log_info "no userdata customizations"
+  if prepare_site_hook "${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh" \
+      '{{ context.config.get_string('scheduler.ami_builder_site_hook_sha256', default='') | default('', true) | string | trim | replace("'", "'\\''") }}' '{{ context.module_id | replace("'", "'\\''") }}.ami_builder_site_hook_sha256'; then
+    /bin/bash "${SITE_HOOK_RUN}" >> ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1 || exit 1
+    finish_site_hook
   fi
 
   # clean-up: shared storage mounts
   {% for name, storage in context.config.get_config('shared-storage').items() %}
   {% if context.eval_shared_storage_scope(shared_storage=storage) %}
-  remove_from_fstab "{{ storage.mount_dir }}"
+  remove_from_fstab '{{ storage.mount_dir | default('', true) | string | replace("'", "'\\''") }}'
   {% endif %}
   {% endfor %}
 
@@ -47,7 +56,35 @@ else
   remove_from_fstab "/scratch"
 
   # clean-up
-  rm -rf /var/tmp/* /tmp/* /var/crash/*
+  # kdump builds its initrd under /var/tmp after boot. Deleting that underneath it failed the
+  # service and left every clone rebuilding the initrd on its own first boot; start waits for it.
+  if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
+    systemctl start kdump.service || log_warning "kdump did not start; a clone builds its own initrd"
+  fi
+  # A running service with PrivateTmp (kdump on EL9) has its /tmp and /var/tmp here, under
+  # systemd-private-*. With those deleted its stop cannot run: the scrub's kdump restart left
+  # the crash kernel loaded, start answered "already running", and the initrd stayed older
+  # than fstab, so every EL9 clone rebuilt it. systemd removes each one when its service stops.
+  # never into a mounted file system: a shared share configured below /tmp or /var/tmp keeps
+  # its contents (a mount point is skipped, and nothing deeper crosses into another file system)
+  # A cleanup root that is itself another mount (a share configured at /tmp, /var/tmp or
+  # /var/crash) is skipped: only the root file system or a local tmpfs is cleaned.
+  function bake_cleanup_root () {
+    local fstype target
+    fstype=$(findmnt -n -o FSTYPE --target "${1}" 2> /dev/null)
+    target=$(findmnt -n -o TARGET --target "${1}" 2> /dev/null)
+    [[ "${target}" == / || "${fstype}" == tmpfs ]] && return 0
+    log_warning "not cleaning ${1}: it is on ${fstype:-an unknown file system} mounted at ${target:-unknown}"
+    return 1
+  }
+  for cleanup_root in /var/tmp /tmp; do
+    bake_cleanup_root "${cleanup_root}" || continue
+    find "${cleanup_root}" -mindepth 1 -maxdepth 1 ! -name 'systemd-private-*' ! -name '.*' \
+      ! -exec mountpoint -q {} \; -exec rm -rf --one-file-system {} +
+  done
+  if bake_cleanup_root /var/crash; then
+    rm -rf --one-file-system /var/crash/*
+  fi
   rm -f /etc/udev/rules.d/70-persistent-net.rules
   grep -l "Created by cloud-init on instance boot automatically" /etc/sysconfig/network-scripts/ifcfg-* | xargs rm -f
   {% if context.config.get_string('scheduler.provider') == 'openpbs' %}

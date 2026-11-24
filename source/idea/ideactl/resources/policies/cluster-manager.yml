@@ -13,7 +13,6 @@ Statement:
       - elasticfilesystem:DescribeFileSystems
       - pricing:GetProducts
       - budgets:ViewBudget
-      - logs:PutRetentionPolicy
     {% if context.config.get_bool(context.module_id + '.bedrock.enabled', False) %}
       - bedrock:ListInferenceProfiles
       - bedrock:GetModelInvocationLoggingConfiguration
@@ -39,6 +38,9 @@ Statement:
     Resource:
       - '{{ context.arns.ses_arn }}'
     Effect: Allow
+
+  # The delivery receipt rows (scratch and stopped-desktop cleanup) are granted in
+  # cluster-manager.ts: this template is at its size limit.
 
   - Action:
       - s3:GetObject

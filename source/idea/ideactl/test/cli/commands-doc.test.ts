@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -181,4 +181,31 @@ it("deploy and upgrade help describe explicit host refresh consent", () => {
     assert.ok(option, `${name} offers --refresh-hosts`);
     assert.match(option.description, /Replace outdated ECS hosts.*directory join/);
   }
+});
+
+it("the guides name only real options beside ideactl deploy", () => {
+  const options = new Set(walkCommands(buildProgram(stubDeps()), [])
+    .filter((entry) => !entry.name.startsWith("cdk"))
+    .flatMap((entry) => entry.flags.flatMap(flagTokens)));
+  const docs = join(PKG, "../../../docs");
+  const unknown: string[] = [];
+  for (const file of readdirSync(docs, { recursive: true, encoding: "utf8" })) {
+    if (!file.endsWith(".md") || file === "changelog.md") continue;
+    for (const [index, line] of readFileSync(join(docs, file), "utf8").split("\n").entries()) {
+      if (!line.includes("ideactl deploy")) continue;
+      for (const flag of line.match(/(?<![\w-])--[a-z][a-z-]*/g) ?? []) if (!options.has(flag)) unknown.push(`${file}:${index + 1} ${flag}`);
+    }
+  }
+  assert.deepEqual(unknown, []);
+});
+
+it("the desktop controller settings template describes the monthly rebuild the pipeline runs", () => {
+  const template = readFileSync(join(PKG, "resources/config/templates/virtual-desktop-controller/settings.yml"), "utf8").split("\n");
+  const comment = template.slice(0, template.findIndex((line) => line.startsWith("  image_refresh_schedule:"))).reverse();
+  const lines = comment.slice(0, comment.findIndex((line) => !line.trimStart().startsWith("#"))).join("\n");
+  const pipeline = readFileSync(join(PKG, "../idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller/app/software_stacks/image_pipeline.py"), "utf8");
+  // the pipeline queues every row each month; the comment an operator reads has to say the same
+  assert.match(pipeline, /every row, changed or not/);
+  assert.match(lines, /every desktop and compute row, changed or not/);
+  assert.doesNotMatch(lines, /only rows/);
 });

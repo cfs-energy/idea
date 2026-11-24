@@ -11,7 +11,7 @@
  * and limitations under the License.
  */
 
-import IdeaListView, {IdeaListViewProps} from "./list-view";
+import IdeaListView, {IdeaListViewColumn, IdeaListViewProps} from "./list-view";
 
 export default IdeaListView
-export type {IdeaListViewProps}
+export type {IdeaListViewColumn, IdeaListViewProps}

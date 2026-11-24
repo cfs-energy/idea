@@ -104,9 +104,60 @@ class BatchCapacityHelper:
         self.available_capacity = self.idle_capacity
 
     def find_group_capacity(self):
+        # the jobs already on this capacity plus the ones admitted now; jobs a check held
+        # back, and the group's jobs in another profile, are not bought nodes (SCH-23)
         self.group_capacity = self._context.job_cache.get_desired_capacity(
-            job_group=self.job.job_group
+            job_group=self.job.job_group,
+            queue_profile=self.job.queue_type,
+            provisioned_only=True,
+        ) + sum(job.desired_capacity() for job in self.jobs)
+
+    def admit_within_queue_limits(self):
+        """
+        the queue's max_running_jobs and max_provisioned_instances, applied to the batch as
+        a whole: each job was checked alone against the count before the batch (SCH-24).
+        jobs past a limit are returned unprovisioned, and the caller re-queues them.
+        """
+        params = None
+        try:
+            profile = self._context.queue_profiles.get_queue_profile(
+                queue_profile_name=self.job.queue_type
+            )
+            params = profile.queue_management_params if profile else None
+        except Exception as e:
+            self._logger.warning(f'{self.job.log_tag} queue limits not read: {e}')
+        if params is None:
+            return
+        max_jobs = int(params.max_running_jobs or 0)
+        max_instances = int(params.max_provisioned_instances or 0)
+        jobs_left = (
+            max_jobs - self._context.job_cache.get_active_jobs(self.job.queue_type)
+            if max_jobs > 0
+            else None
         )
+        instances_left = (
+            max_instances
+            - self._context.instance_cache.get_queue_profile_instance_count(
+                self.job.queue_type
+            )
+            + self.idle_instances
+            if max_instances > 0
+            else None
+        )
+        admitted = []
+        for job in self._jobs:
+            nodes = job.desired_nodes()
+            if (jobs_left is not None and jobs_left < 1) or (
+                instances_left is not None and instances_left < nodes
+            ):
+                self.unprovisioned_jobs.append(job)
+                continue
+            admitted.append(job)
+            if jobs_left is not None:
+                jobs_left -= 1
+            if instances_left is not None:
+                instances_left -= nodes
+        self._jobs = admitted
 
     def compute_batch_capacity(self):
         target_capacity = 0
@@ -121,8 +172,7 @@ class BatchCapacityHelper:
             f'existing_instances: {self.total_instances}'
         )
 
-        index = None
-        for index, current_job in enumerate(self.jobs):
+        for current_job in self.jobs:
             current_job_desired_capacity = current_job.desired_capacity()
             if (
                 self.available_capacity > 0
@@ -138,9 +188,6 @@ class BatchCapacityHelper:
                 )
 
             self.provisioned_jobs.append(current_job)
-
-        if len(self.provisioned_jobs) < len(self.jobs):
-            self.unprovisioned_jobs = self.jobs[index:]
 
         if target_capacity > 0:
             comment = 'Updating target_capacity'
@@ -174,5 +221,14 @@ class BatchCapacityHelper:
 
     def invoke(self) -> BatchCapacityResult:
         self.find_available_capacity()
+        self.admit_within_queue_limits()
+        if not self._jobs:
+            return BatchCapacityResult(
+                provisioned_jobs=[],
+                unprovisioned_jobs=self.unprovisioned_jobs,
+                capacity_info=ProvisioningCapacityInfo(
+                    target_capacity=0, comment='queue limit reached'
+                ),
+            )
         self.find_group_capacity()
         return self.compute_batch_capacity()

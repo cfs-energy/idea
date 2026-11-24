@@ -28,6 +28,28 @@ it('never shows a closed terminal\'s output in the next one after it is sized', 
     } finally {next.dispose();}
 });
 
+it('opens no hidden OSC 8 link target from shell output', async () => {
+    const wasm = readFileSync('node_modules/ghostty-web/ghostty-vt.wasm');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ok: true, arrayBuffer: async () => wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength)}));
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({measureText: () => ({width: 8}), scale() {}, fillRect() {}, fillText() {}} as any);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const term = await createTerminal();
+    try {
+        term.open(document.createElement('div'));
+        const release = configureTerminal(term);
+        term.write('\x1b]8;;ssh://marker.invalid/target\x1b\\marker label\x1b]8;;\x1b\\\r\n');
+        expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe('marker label');
+        // 0.4.0 returns no URI for an OSC 8 cell, so its built-in provider offers no link. A renderer
+        // upgrade that starts returning one must keep the portal's http/https check in front of it.
+        const link = await (term as any).linkDetector.getLinkAt(2, 0);
+        link?.activate(new MouseEvent('click', {ctrlKey: true, metaKey: true}));
+        expect(open).not.toHaveBeenCalled();
+        release();
+    } finally {term.dispose();}
+});
+
 it('keeps plain HTTP links clickable and prevents the built-in provider from opening other schemes', async () => {
     const text = 'https://example.org/path mailto:user@example.org ssh://host/path';
     const buffer = {active: {getLine: () => ({length: text.length, getCell: (col: number) => ({getCodepoint: () => text.codePointAt(col)!, getHyperlinkId: () => 0})})}};

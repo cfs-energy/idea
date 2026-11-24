@@ -7,10 +7,10 @@
 {% set private_zone = private_zone if private_zone is defined else context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) %}
 {# Every path persists: bootstraps reboot (kernel, Lustre, GPU drivers) after this runs, and a
    search path that is only runtime state is gone when pbs_init.d checks the name at boot. #}
-if [[ -L /etc/resolv.conf ]] && systemctl is-active systemd-resolved >/dev/null 2>&1; then
+if [ -L /etc/resolv.conf ] && systemctl is-active systemd-resolved >/dev/null 2>&1; then
   # resolvectl domain is runtime state; a global domain in a drop-in survives the reboot
   RESOLVED_DROPIN=/etc/systemd/resolved.conf.d/idea-scheduler.conf
-  if [[ "$(cat "${RESOLVED_DROPIN}" 2>/dev/null)" != "$(printf '[Resolve]\nDomains=%s' '{{ private_zone }}')" ]]; then
+  if [ "$(cat "${RESOLVED_DROPIN}" 2>/dev/null)" != "$(printf '[Resolve]\nDomains=%s' '{{ private_zone }}')" ]; then
     mkdir -p /etc/systemd/resolved.conf.d
     printf '[Resolve]\nDomains=%s\n' '{{ private_zone }}' > "${RESOLVED_DROPIN}"
     systemctl restart systemd-resolved
@@ -18,22 +18,28 @@ if [[ -L /etc/resolv.conf ]] && systemctl is-active systemd-resolved >/dev/null 
 else
   if ! grep -q "^search .*{{ private_zone }}" /etc/resolv.conf; then
     RESOLV_LOCKED=$(lsattr /etc/resolv.conf 2>/dev/null | awk '$1 ~ /i/ {print "yes"}')
-    if [[ -n "${RESOLV_LOCKED}" ]]; then chattr -i /etc/resolv.conf; fi
+    if [ -n "${RESOLV_LOCKED}" ]; then chattr -i /etc/resolv.conf; fi
     if grep -q "^search " /etc/resolv.conf; then
       sed -i 's/^search /search {{ private_zone }} /' /etc/resolv.conf
     else
       echo "search {{ private_zone }}" >> /etc/resolv.conf
   fi
-  if [[ -n "${RESOLV_LOCKED}" ]]; then chattr +i /etc/resolv.conf; fi
+  if [ -n "${RESOLV_LOCKED}" ]; then chattr +i /etc/resolv.conf; fi
   fi
   # NetworkManager rewrites resolv.conf at boot from the connection: put the zone there too
   if command -v nmcli >/dev/null 2>&1 && systemctl is-active NetworkManager >/dev/null 2>&1; then
     NM_DEVICE=$(ip -o -4 route show default | awk '{print $5}' | head -1)
     NM_CONNECTION=$(nmcli -g GENERAL.CONNECTION device show "${NM_DEVICE}" 2>/dev/null)
     # newer NetworkManager lists lo as an active connection: fall back to the first real one
-    [[ -n "${NM_CONNECTION}" ]] || NM_CONNECTION=$(nmcli -g NAME,TYPE connection show --active | awk -F: '$2 != "loopback" {print $1; exit}')
-    if [[ -n "${NM_CONNECTION}" ]] && ! nmcli -g ipv4.dns-search connection show "${NM_CONNECTION}" | grep -qw '{{ private_zone }}'; then
+    [ -n "${NM_CONNECTION}" ] || NM_CONNECTION=$(nmcli -g NAME,TYPE connection show --active | awk -F: '$2 != "loopback" {print $1; exit}')
+    if [ -n "${NM_CONNECTION}" ] && ! nmcli -g ipv4.dns-search connection show "${NM_CONNECTION}" | grep -qw '{{ private_zone }}'; then
       nmcli connection modify "${NM_CONNECTION}" +ipv4.dns-search '{{ private_zone }}'
+      # modify only edits the saved profile. The next reload writes resolv.conf from the settings
+      # the device is using, which took the zone away from a running RHEL 8 node's mom: its
+      # first connection to the short server name then failed for good and the node never joined.
+      if [ -n "${NM_DEVICE}" ]; then
+        nmcli device reapply "${NM_DEVICE}" || log_warning "unable to apply the search domain to ${NM_DEVICE}"
+      fi
     fi
   fi
 fi

@@ -42,7 +42,7 @@ Cluster-manager is added as an SSH source on the desktop security group; desktop
 
 ## Tickets, limits, and audit
 
-`Terminal.ListTargets` and `Terminal.CreateTicket` require a signed-in portal session. API tokens are refused with `UNAUTHORIZED_ACCESS`, so a leaked token cannot open a shell. Tickets last at most 30 seconds (integer expiry timestamps can shorten this by less than one second), are single-use across replicas, and bind the authenticated user, target, and random browser secret. The WebSocket sends the ticket and binding in its first message, never the URL. The server checks Origin before upgrading, consumes the ticket atomically, and rechecks the enabled account and target before SSH login.
+`Terminal.ListTargets` and `Terminal.CreateTicket` require a signed-in portal session. API tokens are refused with `UNAUTHORIZED_ACCESS`, so a leaked token cannot open a web terminal. Tickets last at most 30 seconds (integer expiry timestamps can shorten this by less than one second), are single-use across replicas, and bind the authenticated user, target, and random browser secret. The WebSocket sends the ticket and binding in its first message, never the URL. The server checks Origin before upgrading, consumes the ticket atomically, and rechecks the enabled account and target before SSH login.
 
 Each login mints a five-minute certificate for the account's POSIX login with principal `idea:<username>`. Its validity starts 60 seconds before minting to tolerate clock skew and ends five minutes after minting. Its key ID contains the terminal session ID; its only extension is `permit-pty`. SSH checks validity at login, so expiry never cuts a live shell. Reconnects require a fresh ticket, key, and certificate.
 

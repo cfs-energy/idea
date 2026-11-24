@@ -1,7 +1,13 @@
 # Begin: Join ActiveDirectory
 
-IDEA_CLUSTER_DATA_DIR="{{ context.config.get_string('shared-storage.data.mount_dir', required=True) }}"
-AD_AUTHORIZATION_NONCE=${RANDOM}
+IDEA_CLUSTER_DATA_DIR='{{ context.config.get_string('shared-storage.data.mount_dir', required=True) | default('', true) | string | replace("'", "'\\''") }}'
+# The nonce and the one-time join password stay out of the bootstrap trace (a log file);
+# tracing resumes once the join is done.
+[[ $- != *x* ]] || AD_JOIN_XTRACE=1
+{ set +x; } 2>/dev/null
+# 128 random bits: the nonce keys this host's one-time join password
+AD_AUTHORIZATION_NONCE=$(openssl rand -hex 16 2>/dev/null || true)
+[[ "${AD_AUTHORIZATION_NONCE}" =~ ^[0-9a-f]{32}$ ]] || AD_AUTHORIZATION_NONCE=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 AD_AUTHORIZATION_INSTANCE_ID=$(instance_id)
 AD_AUTOMATION_SQS_QUEUE_URL="{{ context.config.get_string('directoryservice.ad_automation.sqs_queue_url', required=True) }}"
 AD_AUTOMATION_DDB_TABLE_NAME="${IDEA_CLUSTER_NAME}.ad-automation"
@@ -66,6 +72,7 @@ function check_and_leave_domain() {
             sleep ${LEAVE_SLEEP_TIME}
           else
             log_error "[Join AD] Failed to leave realm after ${LEAVE_MAX_ATTEMPTS} attempts. Proceeding with join operation anyway..."
+            AD_LEAVE_FAILED=true
           fi
         fi
       done
@@ -179,6 +186,7 @@ function ad_automation_wait_for_authorization_and_join () {
       if [[ $? -eq 0 ]]; then
         log_info "[Join AD] Successfully joined realm on attempt ${JOIN_ATTEMPT_COUNT}"
         JOIN_SUCCESS=true
+        AD_JOIN_SUCCEEDED=true
       else
         ((JOIN_ATTEMPT_COUNT++))
         if [[ ${JOIN_ATTEMPT_COUNT} -lt ${JOIN_MAX_ATTEMPTS} ]]; then
@@ -202,11 +210,21 @@ sed -i '/kdc_timesync = 1/a\        rdns = false' /etc/krb5.conf
 {% endif %}
 
 # Check and leave any existing domain before attempting to join
+AD_LEAVE_FAILED=false
 check_and_leave_domain
 
+AD_JOIN_SUCCEEDED=false
 ad_automation_request_authorization
 ad_automation_wait_for_authorization_and_join
 # ad_automation_wait_for_authorization_and_join exports IDEA_HOSTNAME for our Kerberos info
+[[ -z "${AD_JOIN_XTRACE:-}" ]] || set -x
+# A refused or missing authorization, or five failed joins, only log above: a host that is not a
+# domain member has no directory accounts, so it stops here instead of starting its services.
+# where the leave failed, a membership the image still carries does not count: this run's join
+# must have succeeded. Otherwise the membership check alone decides, as before.
+if [[ "${AD_LEAVE_FAILED}" == true && "${AD_JOIN_SUCCEEDED}" != true ]] || ! $(command -v realm) list --name-only 2> /dev/null | grep -qixF "${AD_DOMAIN_NAME}"; then
+  exit_fail "[Join AD] this host is not joined to ${AD_DOMAIN_NAME}; directory accounts would not resolve"
+fi
 
 grep -q "## Add the \"${AD_SUDOERS_GROUP_NAME}\"" /etc/sudoers
 if [[ "$?" != "0" ]]; then
@@ -251,6 +269,9 @@ enumerate = true
 
 sudo_provider = none
 
+# These hosts carry EC2 names, outside any zone the directory serves, so an update can only fail
+dyndns_update = false
+
 # Use our AD-created IDEA hostname
 ldap_sasl_authid = ${IDEA_HOSTNAME}\$
 
@@ -269,6 +290,8 @@ homedir_substring = ${IDEA_CLUSTER_DATA_DIR}/home
 chmod 600 /etc/sssd/sssd.conf
 
 systemctl enable sssd
+# the responders named in `services` above
+disable_sssd_responder_sockets nss pam
 systemctl restart sssd
 
 # note: sss is removed for nsswitch to compared to openldap, to avoid mail spams.

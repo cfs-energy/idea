@@ -7,7 +7,8 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "..", "..", "..");
 const packageResources = join(packageRoot, "resources");
 const outputResources = resolve(
-  process.env.IDEACTL_RESOURCE_OUTPUT_DIR ?? join(packageRoot, "dist", "resources"),
+  // an empty value falls back too: it would resolve to the working directory, which is removed below
+  process.env.IDEACTL_RESOURCE_OUTPUT_DIR || join(packageRoot, "dist", "resources"),
 );
 const bootstrapSource = resolve(
   process.env.IDEACTL_BOOTSTRAP_SOURCE_DIR ??

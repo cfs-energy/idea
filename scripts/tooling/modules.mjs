@@ -42,7 +42,9 @@ function build(name) {
   const metaFile = join(src, meta, '__init__.py');
   writeFileSync(metaFile, readFileSync(metaFile, 'utf8').replace(/^__version__\s*=.*$/m, `__version__ = '${version}'`));
   remove(join(src, 'dist'));
-  run('uv', ['build', '--sdist', '--out-dir', join(src, 'dist'), src], { env: pythonEnv });
+  // The build backend (setuptools) comes from the runtime lock, checked against its hashes.
+  run('uv', ['build', '--sdist', '--build-constraints', join(root, 'requirements/runtime.txt'), '--require-hashes',
+    '--out-dir', join(src, 'dist'), src], { env: pythonEnv });
   const archives = readdirSync(join(src, 'dist')).filter(file => file.endsWith('.tar.gz'));
   if (archives.length !== 1) throw new Error(`Expected one source archive for ${name}`);
   copy(join(src, 'dist', archives[0]), join(output, `idea-${name}-lib.tar.gz`));

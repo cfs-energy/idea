@@ -1,9 +1,9 @@
-# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+# syntax=docker/dockerfile:1.29@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.1 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.2 .
 # Copy the release tarballs into this directory before the build.
 # The dcv-packages context contains checksums.txt, the broker RPM, both gateway RPMs,
 # and both DCV archives. checksums.txt covers each package file, one sha256sum entry
@@ -47,7 +47,8 @@ RUN set -eux; \
     make -j"$(nproc)"; \
     make install; \
     /opt/pbs/libexec/pbs_postinstall; \
-    chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
+    chmod 4755 /opt/pbs/sbin/pbs_iff; \
+    chmod 0755 /opt/pbs/sbin/pbs_rcp
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188 AS dcv-runtime
 
@@ -68,8 +69,8 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       expat libedit tcl tk libical hwloc-libs \
       adcli krb5-workstation sssd-ad sssd-ldap sssd-tools realmd authselect openssh-server openssh-clients \
       java-11-amazon-corretto-headless \
-      nginx openssl nmap-ncat \
-      glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
+      nginx openssl nmap-ncat libcap \
+      glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux findutils jq tar gzip which awscli-2 curl-minimal \
       rsync git vim-minimal vim-enhanced nano tmux \
   && dnf clean all
 
@@ -115,9 +116,15 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
-ARG UV_VERSION=0.13.5
+ARG UV_VERSION=0.13.8
+# PyPI's SHA-256 of that version's manylinux wheel for each build architecture; a new
+# UV_VERSION needs both, or the install fails.
+ARG UV_SHA256_AARCH64=5337c30bb893b4f9ce0ceb921ba2da0d13f649da644f40ad3bef84083bef0203
+ARG UV_SHA256_X86_64=e18a57b8b352eb7c8feb317b9f6f533c8f0ad9673fd6cf34bbe3cf1a9f6a8984
 RUN set -eux; \
-    python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
+    printf 'uv==%s --hash=sha256:%s --hash=sha256:%s\n' "${UV_VERSION}" "${UV_SHA256_AARCH64}" "${UV_SHA256_X86_64}" > /tmp/uv.txt; \
+    python3.13 -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/uv.txt; \
+    rm /tmp/uv.txt; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
     /usr/local/bin/uv --version
 
@@ -142,12 +149,12 @@ RUN set -eux; \
 
 # Build ideactl and include its pinned CDK CLI.
 # The build uses the repository path expected by its resource-copy script.
-ARG NODE_VERSION=26.8.2
-# Node archive checksums for 26.8.2
+ARG NODE_VERSION=26.13.1
+# Node archive checksums for 26.13.1
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
-      amd64) N=x64; SUM=badb3fe6a61b85e1352ca6564dc56b8b7bd5ecd5c474c52acc21dd0cdd586f35 ;; \
-      arm64) N=arm64; SUM=746cdbf21565b4ea06f77642bb0e85466de8bb722242be2c5e006f272c361c63 ;; \
+      amd64) N=x64; SUM=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778 ;; \
+      arm64) N=arm64; SUM=80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d ;; \
       *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
     esac; \
     mkdir -p /usr/local/node; \
@@ -163,6 +170,12 @@ ENV CDK_DISABLE_CLI_TELEMETRY=true
 # Keep runtime tools cached when only the application bundle changes.
 ARG IDEA_VERSION
 # Install all module packages from the release bundle. The selected role runs at startup.
+# Third-party packages come only from the lock: every pin hashed, nothing resolved beyond it. The
+# lock's setuptools (hashed) goes in first; every source archive, the lock's source-only pins and
+# the module archives, is then built with it and no isolated build environment, so pip fetches
+# nothing the lock does not name. A source pin whose build needs anything the image lacks fails
+# the build (--check-build-dependencies) rather than fetch it. pip check fails the build if the
+# lock misses a runtime requirement.
 RUN --mount=type=bind,source=deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz,target=/tmp/release.tar.gz \
     set -eux; \
     mkdir -p /tmp/release; \
@@ -172,14 +185,18 @@ RUN --mount=type=bind,source=deployment/ecr/idea-control-plane/all-${IDEA_VERSIO
       PKG="/tmp/idea/${MODULE}"; \
       mkdir -p "${PKG}"; \
       tar -xf "/tmp/release/${MODULE}-${IDEA_VERSION}.tar.gz" -C "${PKG}"; \
-      python3.13 -m pip install --no-cache-dir -r "${PKG}/requirements.txt"; \
-      python3.13 -m pip install --no-cache-dir "${PKG}"/*-lib.tar.gz; \
+      awk '/^setuptools==/{p=1} p{print; if ($0 !~ /\\$/) exit}' "${PKG}/requirements.txt" > /tmp/setuptools.txt; \
+      grep -q -- '--hash=sha256:' /tmp/setuptools.txt; \
+      python3.13 -m pip install --no-cache-dir --require-hashes --no-deps -r /tmp/setuptools.txt; \
+      python3.13 -m pip install --no-cache-dir --require-hashes --no-deps --no-build-isolation --check-build-dependencies -r "${PKG}/requirements.txt"; \
+      python3.13 -m pip install --no-cache-dir --no-deps --no-build-isolation --check-build-dependencies "${PKG}"/*-lib.tar.gz; \
       mkdir -p "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}"; \
       cp -r "${PKG}/resources" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; \
       if [ -d "${PKG}/webapp" ]; then cp -r "${PKG}/webapp" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; fi; \
     done; \
-    rm -rf /tmp/release /tmp/idea /root/.cache/pip; \
-    mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
+    python3.13 -m pip check; \
+    rm -rf /tmp/release /tmp/idea /tmp/setuptools.txt /root/.cache/pip; \
+    install -d -m 0750 "${IDEA_APP_DEPLOY_DIR}/logs"
 
 # Overlay the gateway web resources.
 ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/
@@ -192,12 +209,16 @@ COPY source/idea/idea-bootstrap /idea-build/source/idea/idea-bootstrap
 COPY source/idea/ideactl/package.json source/idea/ideactl/package-lock.json source/idea/ideactl/tsconfig.json source/idea/ideactl/cdk.json /idea-build/source/idea/ideactl/
 COPY source/idea/ideactl/src /idea-build/source/idea/ideactl/src
 COPY source/idea/ideactl/scripts /idea-build/source/idea/ideactl/scripts
+# npm (and its bundled packages) comes inside the Node archive; nothing in the image runs it after
+# this build, so the same layer removes it.
 RUN set -eux; \
     cd /idea-build/source/idea/ideactl; \
     npm ci; \
     npm run build; \
     npm prune --omit=dev; \
     npm cache clean --force; \
+    rm -rf /usr/local/node/lib/node_modules/npm /usr/local/node/lib/node_modules/corepack \
+      /usr/local/node/bin/npm /usr/local/node/bin/npx /usr/local/node/bin/corepack /root/.npm; \
     find node_modules -type f -name '*.d.ts' -delete; \
     mkdir -p /opt/idea; \
     mv /idea-build/source/idea/ideactl /opt/idea/ideactl; \
@@ -209,7 +230,28 @@ COPY deployment/ecr/idea-control-plane/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deployment/ecr/idea-control-plane/entrypoint.sh /opt/idea/entrypoint.sh
 COPY deployment/ecr/idea-control-plane/roles /opt/idea/roles
 COPY source/idea/idea-bootstrap/common/terminal_host.py /opt/idea/roles/terminal_host.py
-RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh
+COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl
+# The scheduler runs license checks as this account, as hosts do (idea_service_account.jinja2);
+# a system id, so the user sync keeps it.
+RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh /usr/local/bin/ideactl \
+  && useradd --system --no-create-home --shell /sbin/nologin ideaserviceaccount
+
+# The base image pins dnf to its AL2023 release, so a package fixed in a later release stays out
+# until the digest moves, and sshd on this image faces the internet. Take the newest OpenSSH and
+# every security update from the latest release. A build passes a new value each run: the
+# layer cache would otherwise keep the first answer. The release workflow then fails an image
+# whose OpenSSH is behind.
+# The same layer then clears every set-id bit except pbs_iff's and sudo's (roles/setid_strip.sh).
+# It comes after the upgrade, which reinstalls packages with their packaged modes.
+ARG IDEA_PACKAGE_REFRESH=local
+RUN set -eux; \
+    echo "package refresh ${IDEA_PACKAGE_REFRESH}"; \
+    dnf upgrade -y --releasever=latest 'openssh*'; \
+    dnf upgrade -y --releasever=latest --security; \
+    dnf clean all; \
+    /opt/idea/roles/setid_strip.sh --build /; \
+    test -u /usr/bin/sudo; \
+    test -u /opt/pbs/sbin/pbs_iff
 
 # module 8443; broker 8444/8445/8446 client/agent/gateway and 47100/47500 between brokers;
 # gateway 8443 web and QUIC and 8989 health.

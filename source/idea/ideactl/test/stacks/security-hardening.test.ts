@@ -659,17 +659,15 @@ const TASK_ROLES: ReadonlyArray<{ role: string; stack: keyof ContainerTemplates;
 
 /**
  * One action per module policy template that no other module's template carries, read from the
- * templates under `resources/policies`. The gateway template's actions are all present in another
- * template, so it is pinned by an action it has together with the absence of the other four markers.
+ * templates under `resources/policies`. The broker template's actions all appear in the controller
+ * template too, so it is pinned by one of them together with the absence of the other markers.
  */
 const POLICY_MARKERS: Record<string, string> = {
   "cluster-manager": "cognito-idp:*",
   vdc: "application-autoscaling:PutScalingPolicy",
   scheduler: "cloudformation:CreateStack",
-  "dcv-broker": "sns:Publish",
+  "dcv-broker": "dynamodb:CreateTable",
 };
-/** The same, for the gateway template the desktop stack renders onto its task role. */
-const GATEWAY_POLICY_MARKER = "fsx:CreateDataRepositoryTask";
 
 test("4. gives every task its own identity instead of a module instance role", async () => {
   const all = await moduleStacks();
@@ -722,6 +720,11 @@ test("4. gives every task its own identity instead of a module instance role", a
       document.includes(`"${POLICY_MARKERS[role]}"`),
       `${role} task policy renders the ${role} template, the only one naming ${POLICY_MARKERS[role]}`,
     );
+    if (role === "dcv-broker") {
+      for (const [other, marker] of Object.entries(POLICY_MARKERS)) {
+        if (other !== role) assert.equal(document.includes(`"${marker}"`), false, `the broker task policy is not the ${other} template`);
+      }
+    }
     documents.set(role, document);
 
     // The execution role is separate from the task role, so the running process never holds a
@@ -953,23 +956,14 @@ test("8. gives the desktop gateway task its own identity and no host control pat
   assert.ok(managed[0]?.includes("amazon-ssm-managed-instance-core"), "session-manager policy");
   assert.ok(managed[1]?.includes("cloud-watch-agent-server-policy"), "metrics and logs policy");
 
-  // Its policy is rendered from the gateway module template, not hand-written a second time.
-  const inlinePolicies = byType(resources, "AWS::IAM::Policy").filter(([id, resource]) => {
+  // The gateway process calls no AWS API, so the role carries no rendered template, only the
+  // command-session grants CDK writes. The certificate pair reaches it through the execution role.
+  const taskPolicies = byType(resources, "AWS::IAM::Policy").filter(([id, resource]) => {
     if (id.includes("DefaultPolicy")) return false;
     const roles = properties(resource, "IAM policy")["Roles"];
     return Array.isArray(roles) && roles.some((entry) => refId(entry) === taskRoleId);
   });
-  assert.equal(inlinePolicies.length, 1, "one rendered policy on the gateway task role");
-  const document = JSON.stringify(
-    properties(inlinePolicies[0]![1], "gateway task policy")["PolicyDocument"],
-  );
-  assert.ok(
-    document.includes(`"${GATEWAY_POLICY_MARKER}"`),
-    `the gateway task policy renders the gateway template, the only one naming ${GATEWAY_POLICY_MARKER}`,
-  );
-  for (const [role, marker] of Object.entries(POLICY_MARKERS)) {
-    assert.equal(document.includes(`"${marker}"`), false, `the gateway task policy is not the ${role} template`);
-  }
+  assert.deepEqual(taskPolicies.map(([id]) => id), [], "no rendered policy on the gateway task role");
 
   // The execution role reads the certificate pair at task start and nothing else. It is separate
   // from the task role, so the running process never holds the secret grant.

@@ -1,18 +1,19 @@
+{% from '_templates/windows/ps_text.jinja2' import ps_text %}
 # Begin: Install CloudWatch Agent
 
 $CLOUDWATCH_AGENT_BOOTSTRAP_DIR = "C:\temp\bootstrap\amazon-cloudwatch-agent"
 New-Item -ItemType Directory -Force -Path $CLOUDWATCH_AGENT_BOOTSTRAP_DIR | Out-Null
 
 function Get-CloudWatchAgentDownloadLink {
-    $DOWNLOAD_LINK = "{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link', default='') }}"
+    $DOWNLOAD_LINK = '{{ ps_text(context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link', default='')) }}'
     if (![string]::IsNullOrEmpty($DOWNLOAD_LINK)) {
         return $DOWNLOAD_LINK
     }
 
-    $DOWNLOAD_LINK_PATTERN = "{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern', required=True) }}"
+    $DOWNLOAD_LINK_PATTERN = '{{ ps_text(context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern', required=True)) }}'
     $DOWNLOAD_LINK_PATTERN | Out-File -FilePath "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt" -Encoding utf8
 
-    $AWS_REGION = "{{ context.aws_region }}"
+    $AWS_REGION = '{{ ps_text(context.aws_region) }}'
     (Get-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt") -replace '%region%', $AWS_REGION | Set-Content "$CLOUDWATCH_AGENT_BOOTSTRAP_DIR\cloudwatch_download_link.txt"
 
     # For Windows, we use windows/amd64 and .msi extension (Windows only supports amd64)

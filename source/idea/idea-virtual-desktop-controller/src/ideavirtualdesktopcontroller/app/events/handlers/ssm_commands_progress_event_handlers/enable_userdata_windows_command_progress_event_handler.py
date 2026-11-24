@@ -20,6 +20,9 @@ from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import 
 )
 
 
+CAPTURE_PREPARE_FAILED_MESSAGE = 'Preparing this desktop for an image capture did not finish. Reboot the desktop, or contact your administrator.'
+
+
 class EnableUserdataWindowsCommandProgressEventListener(
     BaseVirtualDesktopControllerEventHandler
 ):
@@ -66,7 +69,7 @@ class EnableUserdataWindowsCommandProgressEventListener(
             'software_stack_id', event.detail, None
         )
 
-        if status in {'Success', 'Failed'}:
+        if status in {'Success', 'Failed', 'TimedOut', 'Cancelled'}:
             session = self.session_db.get_from_db(
                 idea_session_owner=idea_session_owner, idea_session_id=idea_session_id
             )
@@ -74,11 +77,14 @@ class EnableUserdataWindowsCommandProgressEventListener(
                 self.ssm_commands_db.delete(command_id=command_id)
                 self._continue_software_stack_creation(session, software_stack_id)
             else:
-                # FAILED
+                # no capture follows, so nothing else releases the desktop
+                session.locked = False
+                session.server.locked = False
                 session.state = VirtualDesktopSessionState.ERROR
+                session.failure_reason = CAPTURE_PREPARE_FAILED_MESSAGE
                 self.log_error(
                     message_id=message_id,
-                    message=f'Session: {session.idea_session_id}:{session.name} moved to Error state',
+                    message=f'Session: {session.idea_session_id}:{session.name} moved to Error state: preparing the image capture ended {status}',
                 )
 
             _ = self.server_db.update(session.server)

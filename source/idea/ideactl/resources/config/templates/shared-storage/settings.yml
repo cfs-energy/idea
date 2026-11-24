@@ -113,7 +113,8 @@ data:
 #       management_dns: svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
 #       iscsi_dns: iscsi.svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
 #     # Storage metrics (cluster-manager.metrics.storage): an ONTAP user that can read
-#     # /api/storage/quota/reports and /api/storage/volumes, its password in a Secrets Manager
+#     # /api/storage/quota/reports and /api/storage/volumes (read-only on volumes includes the
+#     # files path File System Analytics answers on), its password in a Secrets Manager
 #     # secret tagged idea:ClusterName=<cluster> and idea:ModuleName=cluster-manager.
 #     metrics:
 #       username: idea-metrics

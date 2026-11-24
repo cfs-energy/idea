@@ -19,4 +19,3 @@ from ideasdk.aws.instance_metadata_util import InstanceMetadataUtil
 from ideasdk.aws.iam_permission_util import IamPermissionUtil
 from ideasdk.aws.ec2_instance_types_db import EC2InstanceTypesDB
 from ideasdk.aws.aws_util import AWSUtil
-from ideasdk.aws.aws_resources import AwsResources

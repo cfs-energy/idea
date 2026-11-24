@@ -46,11 +46,14 @@ PBS_CORE_LIMIT=unlimited
 PBS_SCP=/usr/bin/scp
 " > /etc/pbs.conf
 
-echo -e "
-\$clienthost {{ pbs_server_name }}
-\$usecp *:/dev/null /dev/null
-\$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
-" > /var/spool/pbs/mom_priv/config
+# a quoted here-document: the stored mount paths are data, not shell
+cat > /var/spool/pbs/mom_priv/config <<'IDEA_MOM_CONFIG'
+
+$clienthost {{ pbs_server_name }}
+$usecp *:/dev/null /dev/null
+$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
+
+IDEA_MOM_CONFIG
 
 # MoM passes these defaults to batch and interactive jobs without sourcing login profiles.
 # The compute OpenMPI step prepends OpenMPI 5 here on nodes with EFA.

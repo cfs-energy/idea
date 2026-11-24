@@ -111,7 +111,9 @@ def test_an_epoch_timestamp_marks_the_point_at_that_time(context):
 @pytest.mark.parametrize(
     'transport', ['udp://127.0.0.1:8125', 'unix:///tmp/dsd.socket']
 )
-@pytest.mark.parametrize('family', ['cost.amortized', 'storage.used_bytes'])
+@pytest.mark.parametrize(
+    'family', ['cost.amortized', 'storage.used_bytes', 'session.count']
+)
 def test_collectors_disable_origin_enrichment_on_shared_provider(
     context, monkeypatch, transport, family
 ):
@@ -123,7 +125,7 @@ def test_collectors_disable_origin_enrichment_on_shared_provider(
     sender = Mock()
     monkeypatch.setattr(socket, 'socket', Mock(return_value=sender))
     provider = DogStatsdMetrics(context, 'idea-mock/mock/component')
-    metric_type = 'Gauge' if family.startswith('storage.') else 'Counter'
+    metric_type = 'Gauge' if family.startswith(('storage.', 'session.')) else 'Counter'
     provider.log(
         [_entry(family, 2, [('module', 'cluster'), ('host', 'old-host')], metric_type)]
     )

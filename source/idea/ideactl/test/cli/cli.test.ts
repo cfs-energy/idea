@@ -16,6 +16,7 @@ import { asBoolFlag } from '../../src/cli/commands/deploy.ts';
 import { checkClusterStatus, connectionInfo, modulesTable, sessionManagerUrl, statusEndpoints } from '../../src/cli/commands/status.ts';
 import { buildProgram, run } from '../../src/cli/main.ts';
 import { ClusterConfig, ClusterConfigError } from '../../src/config/cluster-config.ts';
+import { ClusterSettingsWriteDenied } from '../../src/config/cluster-config-db.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 
 const CLUSTER = 'sample-cluster';
@@ -339,6 +340,9 @@ const STATUS_TABLES = {
     { key: 'bastion-host.public_ip', value: '192.0.2.10' },
     { key: 'bastion-host.base_os', value: 'amazonlinux2023' },
     { key: 'bastion-host.instance_id', value: 'i-0123456789abcdef0' },
+    // the services hold their own OpenSearch rules, so an analytics upgrade may run alone
+    { key: 'cluster-manager.opensearch_ingress_rule', value: 'sgr-0123456789abcdef0' },
+    { key: 'scheduler.opensearch_ingress_rule', value: 'sgr-0123456789abcdef1' },
   ],
 };
 
@@ -497,6 +501,23 @@ describe('the commander wiring reaches each action', () => {
     assert.deepEqual(deps.writes, [{ op: 'setConfigEntry', payload: { key: 'global-settings.x', value: 7 } }]);
   });
 
+  it('config set refused by the credentials exits 1 with the plain message and writes nothing more', async () => {
+    const deps = fakeDeps();
+    deps.configWriter = async () =>
+      ({
+        setConfigEntry: async () => {
+          throw new ClusterSettingsWriteDenied('sample.cluster-settings', new Error('AccessDeniedException'));
+        },
+      }) as never;
+    assert.equal(
+      await run(args('config', 'set', 'Key=global-settings.x,Type=int,Value=7', 'Key=global-settings.y,Type=int,Value=8', '--force'), deps),
+      1,
+    );
+    assert.equal(deps.stderr.length, 1);
+    assert.match(deps.stderr[0] ?? '', /^These AWS credentials cannot change sample\.cluster-settings/);
+    assert.deepEqual(deps.writes, []);
+  });
+
   it('config delete deletes each prefix, trimmed', async () => {
     const deps = fakeDeps();
     assert.equal(await run(args('config', 'delete', ' analytics. ', 'alb.listener_rules.'), deps), 0);
@@ -547,4 +568,21 @@ it('asBoolFlag maps commander strings the way deploy and upgrade pass them', () 
   assert.equal(asBoolFlag('false', true), false);
   assert.equal(asBoolFlag('no', true), false);
   assert.equal(asBoolFlag(false, true), false);
+  assert.equal(asBoolFlag('OFF', true), false);
+  // a mistyped value is refused rather than read as false
+  assert.throws(() => asBoolFlag('maybe', true), /expected true or false, got: "maybe"/);
+});
+
+it('a choice prompt asks again on an answer that matches no choice instead of taking the default', async () => {
+  const { resolveChoiceAnswer } = await import('../../src/cli/main.ts');
+  const choice = { choices: ['Yes', 'Reload Changes', 'Exit'], default: 'Yes' };
+  assert.equal(resolveChoiceAnswer(choice, 'no'), undefined);
+  assert.equal(resolveChoiceAnswer(choice, 'n'), undefined);
+  assert.equal(resolveChoiceAnswer(choice, 'exit'), 'Exit');
+  assert.equal(resolveChoiceAnswer(choice, ''), 'Yes');
+  // a unique prefix names its choice; an ambiguous or unknown one does not
+  assert.equal(resolveChoiceAnswer(choice, 'y'), 'Yes');
+  assert.equal(resolveChoiceAnswer(choice, 'r'), 'Reload Changes');
+  assert.equal(resolveChoiceAnswer({ choices: ['Yes', 'Yesterday'] }, 'yes'), 'Yes');
+  assert.equal(resolveChoiceAnswer({ choices: ['Yes', 'Yesterday'] }, 'ye'), undefined);
 });

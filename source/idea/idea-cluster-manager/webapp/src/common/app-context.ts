@@ -89,11 +89,21 @@ class AppContext {
             }
         }
 
+        if (props.app.session_management === 'in-memory') {
+            // an earlier version fell back to browser storage when the service worker failed: remove what it left
+            try {
+                ['refresh-token', 'access-token', 'id-token', 'sso-auth'].forEach(key => localStorage.removeItem(`idea.auth.${key}`))
+            } catch {
+                // storage that cannot be opened holds nothing to remove
+            }
+        }
+
         if (this.props.serviceWorkerRegistration) {
             initializeServiceWorker()
         } else {
+            // without a service worker, an in-memory session stays in page memory: it never falls back to browser storage
             this.authContext = new IdeaAuthenticationContext({
-                sessionManagement: 'local-storage',
+                sessionManagement: props.app.session_management === 'in-memory' ? 'in-memory' : 'local-storage',
                 authEndpoint: authEndpoint
             })
         }
@@ -122,14 +132,15 @@ class AppContext {
 
         new Set([...this.clients.getClients(), this.clients.scheduler(), this.clients.virtualDesktopAdmin(), this.reportingClient]).forEach(client => {
             const invoke = client.apiInvoker.invoke.bind(client.apiInvoker)
-            client.apiInvoker.invoke = async (request, isPublic = false) => {
+            // quiet and the request timeout are passed on: reconcile asks for a long timeout, error reports for quiet
+            client.apiInvoker.invoke = async (request, isPublic = false, ...rest) => {
                 if (!isPublic && request.header?.namespace !== 'Reporting.GetCapabilities') {
                     const loggedIn = await this.authService.isLoggedIn()
                     if (!loggedIn || (request.header?.namespace.startsWith('Reporting.') && !this.authService.canReadReporting())) {
                         throw new IdeaException({errorCode: 'UNAUTHORIZED_ACCESS', message: 'Access denied'})
                     }
                 }
-                return invoke(request, isPublic)
+                return invoke(request, isPublic, ...rest)
             }
         })
 

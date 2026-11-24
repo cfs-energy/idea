@@ -12,11 +12,15 @@
 from typing import Dict, Callable
 
 import ideavirtualdesktopcontroller
+from ideavirtualdesktopcontroller.app.session_permissions.constants import (
+    is_group_share,
+)
 from ideadatamodel import (
     ListSessionsRequest,
     SocaFilter,
+    SocaPaginator,
     Notification,
-    ListPermissionsRequest,
+    VirtualDesktopSessionState,
 )
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
@@ -24,9 +28,6 @@ from ideavirtualdesktopcontroller.app.clients.events_client.events_client import
 )
 from ideavirtualdesktopcontroller.app.events.handlers.db_entry_event_handlers.base_db_event_handler import (
     BaseDBEventHandler,
-)
-from ideavirtualdesktopcontroller.app.session_permissions.constants import (
-    SESSION_PERMISSIONS_FILTER_PERMISSION_PROFILE_ID_KEY,
 )
 from ideavirtualdesktopcontroller.app.sessions.constants import (
     USER_SESSION_DB_FILTER_SOFTWARE_STACK_ID_KEY,
@@ -157,21 +158,50 @@ class DbEntryUpdatedEventHandler(BaseDBEventHandler):
                 break
 
         if is_permission_updated:
-            response = self.session_permissions_db.list_from_index(
-                ListPermissionsRequest(
-                    filters=[
-                        SocaFilter(
-                            key=SESSION_PERMISSIONS_FILTER_PERMISSION_PROFILE_ID_KEY,
-                            value=new_permission_profile.profile_id,
-                        )
-                    ]
-                )
-            )
+            profile_id = new_permission_profile.profile_id
             idea_session_info = set()
-            for permission in response.listing:
-                idea_session_info.add(
-                    (permission.idea_session_id, permission.idea_session_owner)
+            # every share with this profile, read from the table page by page
+            cursor = None
+            while True:
+                permissions, cursor = self.session_permissions_db.list_all_from_db(
+                    cursor
                 )
+                for permission in permissions:
+                    if (
+                        permission.permission_profile is not None
+                        and permission.permission_profile.profile_id == profile_id
+                    ):
+                        idea_session_info.add(
+                            (permission.idea_session_id, permission.idea_session_owner)
+                        )
+                if Utils.is_empty(cursor):
+                    break
+
+            # the owner and admin defaults apply to every desktop, with or without a share
+            config = self.context.config()
+            if profile_id in {
+                config.get_string(
+                    'virtual-desktop-controller.dcv_session.default_profiles.owner',
+                    required=True,
+                ),
+                config.get_string(
+                    'virtual-desktop-controller.dcv_session.default_profiles.admin',
+                    required=True,
+                ),
+            }:
+                cursor = None
+                while True:
+                    result = self.session_db.list_all_from_db(
+                        ListSessionsRequest(paginator=SocaPaginator(cursor=cursor))
+                    )
+                    for session in Utils.get_as_list(result.listing, []):
+                        if session.state == VirtualDesktopSessionState.READY:
+                            idea_session_info.add(
+                                (session.idea_session_id, session.owner)
+                            )
+                    cursor = result.cursor
+                    if Utils.is_empty(cursor):
+                        break
 
             for idea_session in idea_session_info:
                 self.events_utils.publish_enforce_session_permissions_event(
@@ -195,6 +225,9 @@ class DbEntryUpdatedEventHandler(BaseDBEventHandler):
             required=True,
         )
         if not notifications_enabled:
+            return
+        # a group share sends no email: its members change, and the actor is no user
+        if is_group_share(new_session_permission):
             return
 
         old_session_permission = (
@@ -220,7 +253,9 @@ class DbEntryUpdatedEventHandler(BaseDBEventHandler):
                         'url': f'{self.context.config().get_cluster_external_endpoint()}/#/home/shared-desktops',
                         'formatted_expiry_date': new_session_permission.expiry_date.strftime(
                             '%B %d, %Y at %I:%M %p'
-                        ),
+                        )
+                        if new_session_permission.expiry_date is not None
+                        else '',
                     },
                 )
             )

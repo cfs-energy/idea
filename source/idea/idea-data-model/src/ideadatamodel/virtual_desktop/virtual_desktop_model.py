@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 __all__ = (
+    'VirtualDesktopOrphanInstance',
     'VirtualDesktopSessionState',
     'VirtualDesktopSessionType',
     'VirtualDesktopServer',
@@ -41,7 +42,7 @@ from ideadatamodel import (
     constants,
 )
 
-from typing import Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime
 from enum import Enum
 from pydantic import Field, PrivateAttr
@@ -171,6 +172,23 @@ class VirtualDesktopSoftwareStack(SocaBaseModel):
     allowed_instance_types: Optional[List[str]] = Field(default=None)
     # the image pipeline never repoints a pinned stack (false when absent)
     image_pinned: Optional[bool] = Field(default=None)
+    # who answers for a stack nothing rebuilds, and the date it stops being offered
+    owner: Optional[str] = Field(default=None)
+    expires_on: Optional[datetime] = Field(default=None)
+    # an update asking to remove expires_on, which absent cannot say; never stored
+    clear_expires_on: Optional[bool] = Field(default=None)
+    # worked out for a listing, never stored
+    effective_expires_on: Optional[datetime] = Field(default=None)
+    expiry_state: Optional[str] = Field(default=None)
+    expiry_warning: Optional[str] = Field(default=None)
+
+
+class VirtualDesktopOrphanInstance(SocaBaseModel):
+    instance_id: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    state: Optional[str] = Field(default=None)
+    launched_on: Optional[datetime] = Field(default=None)
 
 
 class VirtualDesktopServer(SocaBaseModel):
@@ -268,6 +286,8 @@ class VirtualDesktopSessionPermission(SocaBaseModel):
 class VirtualDesktopSession(SocaBaseModel):
     # Keep the database version out of API input and datetime conversions.
     _updated_on_ms: Optional[int] = PrivateAttr(default=None)
+    # the stored row this object was read from: a write sends only what changed since
+    _read_entry: Optional[Dict] = PrivateAttr(default=None)
     recovering: bool = Field(default=False)
     recovery_attempts: int = Field(default=0)
     recovery_next_attempt_at: int = Field(default=0)

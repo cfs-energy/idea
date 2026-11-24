@@ -16,27 +16,25 @@ import pathlib
 import platform
 import random
 import re
+import secrets
 import stat
-import time
+import string
 import unicodedata
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Union, List, Set, Dict, Any, Mapping, Callable, TypeVar
+from typing import Optional, Union, List, Set, Dict, Any, Mapping, TypeVar
 
 import arrow
-import semver
 import shortuuid
 import yaml
-from password_generator import PasswordGenerator
 from pydantic import BaseModel
 from decimal import Decimal
 import botocore.session
 import boto3
 
 import ideasdk
-from ideadatamodel import exceptions, errorcodes, constants
+from ideadatamodel import exceptions, constants
 from ideadatamodel.model_utils import ModelUtils
 from ideasdk.utils import EnvironmentUtils
 
@@ -52,9 +50,27 @@ DIRECTORY_TREE_BRANCH = '│   '
 DIRECTORY_TREE_TEE = '├── '
 DIRECTORY_TREE_LAST = '└── '
 
+# Symbols a generated password draws from: all count as symbols for Cognito and Active Directory.
+# No '$' (the Windows desktop bootstrap puts the password in a double-quoted PowerShell string),
+# quotes, backslashes or backticks.
+PASSWORD_SPECIAL_CHARS = '!#%^&*(),.-_+=<>?'
+
 
 # noinspection InsecureHash
 class Utils:
+    @staticmethod
+    def scan_all(table, scan_request: Optional[Dict] = None) -> List[Dict]:
+        """every item of a DynamoDB scan. one response stops at 1 MB, before any filter."""
+        request = dict(scan_request or {})
+        items = []
+        while True:
+            page = table.scan(**request)
+            items.extend(page.get('Items') or [])
+            last_evaluated_key = page.get('LastEvaluatedKey')
+            if not last_evaluated_key:
+                return items
+            request['ExclusiveStartKey'] = last_evaluated_key
+
     @staticmethod
     def is_empty(value: Optional[Union[Any]]) -> bool:
         return ModelUtils.is_empty(value)
@@ -237,7 +253,7 @@ class Utils:
     @staticmethod
     def from_yaml(data: str, loader: yaml.Loader = None) -> Union[Dict, List]:
         if loader is not None:
-            yaml.load(data, loader)
+            return yaml.load(data, loader)
         else:
             return yaml.safe_load(data)
 
@@ -287,41 +303,6 @@ class Utils:
         if max_retries is not None:
             current_retry = current_retry % max_retries
         return backoff_in_seconds * 2**current_retry + random.uniform(0, 1)
-
-    @staticmethod
-    def retry_with_backoff(fn: Callable[[], T], retries=5, backoff_in_seconds=1) -> T:
-        """
-        retry and exponential backoff
-        To make a setup more resilient we should allow for certain actions to be retried before they fail.
-        We should not "hammer" our underlying systems, so it is wise to wait a bit before a
-        retry (exponential backoff).
-        Note: this only works if actions are idempotent and you can afford to wait.
-
-        credits: Kees C. Bakker
-        sourced from https://keestalkstech.com/2021/03/python-utility-function-retry-with-exponential-backoff/
-
-        modified as per SOCA requirements.
-
-        :param fn:
-        :param retries:
-        :param backoff_in_seconds:
-        :return:
-        """
-        x = 0
-        while True:
-            try:
-                return fn()
-            except:  # noqa
-                if x == retries:
-                    raise exceptions.exceeded_max_retries(f'retries: {retries}')
-                else:
-                    sleep = Utils.get_retry_backoff_interval(
-                        current_retry=x,
-                        max_retries=retries,
-                        backoff_in_seconds=backoff_in_seconds,
-                    )
-                    time.sleep(sleep)
-                    x += 1
 
     @staticmethod
     def minutes(seconds=None, millis=None) -> int:
@@ -382,15 +363,36 @@ class Utils:
         min_numbers=1,
         min_special_chars=1,
     ) -> str:
-        generator = PasswordGenerator()
-        generator.maxlen = length
-        generator.minlen = length
-        generator.minuchars = min_uppercase_chars
-        generator.minlchars = min_lowercase_chars
-        generator.minnumbers = min_numbers
-        generator.minschars = min_special_chars
-        generator.excludeschars = '$'
-        return generator.generate()
+        """
+        A random password from the OS CSPRNG (secrets only): at least the given count of each
+        class, padded to length from all classes, then shuffled. When the minimums add up to more
+        than length, the password is that long instead.
+        """
+        counts = (
+            min_uppercase_chars,
+            min_lowercase_chars,
+            min_numbers,
+            min_special_chars,
+        )
+        if length < 0 or min(counts) < 0:
+            raise ValueError('password length and minimums must not be negative')
+        pools = (
+            string.ascii_uppercase,
+            string.ascii_lowercase,
+            string.digits,
+            PASSWORD_SPECIAL_CHARS,
+        )
+        characters = [
+            secrets.choice(pool)
+            for pool, count in zip(pools, counts)
+            for _ in range(count)
+        ]
+        everything = ''.join(pools)
+        characters += [
+            secrets.choice(everything) for _ in range(length - len(characters))
+        ]
+        secrets.SystemRandom().shuffle(characters)
+        return ''.join(characters)
 
     @staticmethod
     def to_title_case(s: str) -> str:
@@ -469,25 +471,6 @@ class Utils:
     @staticmethod
     def current_time_ms() -> int:
         return int(arrow.utcnow().timestamp() * 1000)
-
-    @staticmethod
-    def extract_semver(filename_or_uri) -> str:
-        stem = Path(filename_or_uri).stem
-        index = None
-        for index, c in enumerate(stem):
-            if not c.isnumeric():
-                continue
-            break
-        version = stem[index:]
-        try:
-            semver.VersionInfo.parse(version)
-            return version
-        except ValueError:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.INVALID_SEMVER,
-                message=f'Could not extract semantic version from: {filename_or_uri}. '
-                f'Please ensure you have included a semantic version in the package name.',
-            )
 
     @staticmethod
     def base64_encode(data: Union[str, bytes]) -> str:
@@ -661,7 +644,6 @@ class Utils:
                         updated_list.append(float(string_val))
                     else:
                         updated_list.append(int(string_val))
-                    updated_list.append(value)
                 updated_value = updated_list
         if updated_value is None:
             return value

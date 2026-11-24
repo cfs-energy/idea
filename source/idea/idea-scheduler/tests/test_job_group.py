@@ -215,3 +215,49 @@ def test_shared_capacity_guard_legacy_stack_without_signature(context: AppContex
     with pytest.raises(exceptions.SocaException) as exc_info:
         provisioner.provision_job_on_shared_capacity()
     assert exc_info.value.error_code == errorcodes.SHARED_CAPACITY_INVALID_QUEUE
+
+
+@pytest.mark.parametrize('check', ['check_budgets', 'check_licenses'])
+def test_reused_shared_capacity_runs_the_budget_and_license_checks(
+    context: AppContext, monkeypatch, check
+):
+    """
+    a job placed on a shared stack that is already up is refused by the same budget and
+    license checks a new stack runs, and is not provisioned on it
+    """
+    job = make_job()
+    stack = mock_stack(
+        job_group=job.get_job_group(),
+        job_queue='normal',
+        capacity_signature=job.get_capacity_signature(),
+    )
+    provisioner = make_provisioner(context, job, stack)
+    util = provisioner.provisioning_util
+    monkeypatch.setattr(util, 'check_bedrock', lambda: None)
+    monkeypatch.setattr(util.__class__, 'is_spot_fleet', property(lambda self: False))
+    monkeypatch.setattr(
+        util.__class__,
+        'auto_scaling_group',
+        property(lambda self: type('Asg', (), {'desired_capacity': 10})()),
+    )
+    refusal = exceptions.soca_exception(
+        errorcodes.BUDGETS_LIMIT_EXCEEDED
+        if check == 'check_budgets'
+        else errorcodes.NOT_ENOUGH_LICENSES,
+        'marker refusal',
+    )
+    other = 'check_licenses' if check == 'check_budgets' else 'check_budgets'
+    monkeypatch.setattr(util, other, lambda *a, **k: [])
+
+    def refuse(*_a, **_k):
+        raise refusal
+
+    monkeypatch.setattr(util, check, refuse)
+    provisioned = []
+    monkeypatch.setattr(
+        provisioner, 'provision_job_in_scheduler', lambda **kw: provisioned.append(kw)
+    )
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        provisioner.provision_job_on_shared_capacity()
+    assert exc_info.value is refusal
+    assert provisioned == []

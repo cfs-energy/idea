@@ -17,25 +17,31 @@ from typing import Callable, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
+from ideadatamodel import constants
+from ideavirtualdesktopcontroller.app.clients.dcv_broker_client.dcv_broker_client_utils import (
+    DCVBrokerClientUtils,
+)
 from ideadatamodel import (
     ImageBuildRecord,
     ImageCheck,
     ImagePipelineSettings,
     ImageVariant,
+    ListSoftwareStackRequest,
     Project,
     SocaBaseModel,
+    SocaPaginator,
     VirtualDesktopServer,
     VirtualDesktopGPU,
     VirtualDesktopSession,
     VirtualDesktopSessionState,
     VirtualDesktopSoftwareStack,
 )
+from ideasdk.aws.failure_capture import FailedHost, capture_failure
 from ideasdk.aws.validation_identity import (
     ensure_validation_identity,
     invoke_cluster_manager,
 )
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     BOOTSTRAP_LOG_STREAM,
     BOOTSTRAP_STATUS_TAG,
@@ -83,6 +89,31 @@ CAPACITY_MARKERS = (
     'RequestLimitExceeded',
     'Throttling',
 )
+
+
+def _attempt_suffix(record: ImageBuildRecord) -> str:
+    """
+    started_on names one bake. A worker past its time limit can still be running when the retry
+    starts, and its cleanup must not reach the retry's test launch.
+    """
+    started = record.started_on
+    return f'-{int(started.timestamp()):x}' if started else ''
+
+
+def validation_stack_id(record: ImageBuildRecord, variant: str) -> str:
+    suffix = '' if variant == 'cpu' else f'-{variant}'
+    return (
+        f'{VALIDATION_STACK_PREFIX}{record.base_os}-'
+        f'{record.architecture.replace("_", "-")}{suffix}{_attempt_suffix(record)}'
+    )
+
+
+def validation_session_name(record: ImageBuildRecord, variant: str) -> str:
+    suffix = '' if variant == 'cpu' else f'-{variant}'
+    return (
+        f'{VALIDATION_NAME_PREFIX}{record.base_os}-{record.architecture}{suffix}'
+        f'{_attempt_suffix(record)}'
+    )
 
 
 class CapacityWait(Exception):
@@ -260,7 +291,11 @@ def shared_filesystems(config, windows: bool) -> List[Tuple[str, str]]:
                 'cifs_share_name'
             ):
                 dns = storage['fsx_netapp_ontap']['svm']['smb_dns']
-                found.append((name, f'\\\\{dns}\\{volume["cifs_share_name"]}'))
+                # the path the desktop maps: one separator between parts, as the bootstrap writes it
+                share = '\\'.join(
+                    part for part in volume['cifs_share_name'].split('\\') if part
+                )
+                found.append((name, f'\\\\{dns}\\{share}'))
             elif storage['provider'] == 'fsx_windows_file_server':
                 dns = storage['fsx_windows_file_server']['dns']
                 found.append((name, f'\\\\{dns}\\share'))
@@ -322,7 +357,8 @@ def windows_share_probe() -> str:
             r'$parts = $probe.TrimEnd("\").Split("\");',
             r'if ($parts.Count -eq 4) {',
             r'$server = $parts[2]; $share = $parts[3];',
-            r'$shares = (cmd /c "net view \\$server /all 2>&1");',
+            # one string per output line, as the share match below reads them
+            r'$shares = @(& net.exe view "\\$server" /all 2>&1 | ForEach-Object { "$_" });',
             r'if ($LASTEXITCODE -ne 0) { if ($perUser) { Check $n $true "$label not probed (refused to SYSTEM)"; return }; Check $n $false "$label refused to SYSTEM, and the shares on $server could not be listed to show it exists: $(($shares | Out-String).Trim())"; return };',
             r'$found = $shares | Where-Object { $_ -match ("^" + [regex]::Escape($share) + "(\s{2,}|\s*$)") };',
             r'if ($found) { Check $n $true "$label reachable; the share exists, listing refused to SYSTEM" }',
@@ -337,19 +373,32 @@ def windows_share_probe() -> str:
 
 
 def windows_host_script(
-    dcv_session_id: str, mounts: List[Tuple[str, str]], variant: str
+    dcv_session_id: str,
+    mounts: List[Tuple[str, str]],
+    variant: str,
+    user: str = '',
+    active_directory: bool = True,
 ) -> str:
-    def ps(value: str) -> str:
-        return "'" + value.replace("'", "''") + "'"
+    # the same literal the resume commands use: typographic quotes end a string too
+    ps = DCVBrokerClientUtils._powershell_literal
 
     lines = [
         'function Check($n, $ok, $d) { $s = if ($ok) { "ok" } else { "fail" }; Write-Output "CHECK|$n|$s|$d" }',
         f'$sid = {ps(dcv_session_id)}',
         "$out = (& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv.exe' list-sessions 2>&1 | Out-String)",
         'Check "dcv_session" ($out -match [regex]::Escape($sid)) "dcv list-sessions: $($out.Trim())"',
-        'try { $sc = Test-ComputerSecureChannel; Check "directory_user" $sc "domain secure channel: $sc" }'
-        ' catch { Check "directory_user" $false "Test-ComputerSecureChannel failed: $($_.Exception.Message)" }',
     ]
+    if active_directory:
+        lines.append(
+            'try { $sc = Test-ComputerSecureChannel; Check "directory_user" $sc "domain secure channel: $sc" }'
+            ' catch { Check "directory_user" $false "Test-ComputerSecureChannel failed: $($_.Exception.Message)" }'
+        )
+    else:
+        # a host outside a domain has the owner as a local account
+        lines.append(
+            f'$u = Get-LocalUser -Name {ps(user)} -ErrorAction SilentlyContinue; '
+            'Check "directory_user" ([bool]($u -and $u.Enabled)) "local user: $(if ($u) { "enabled=$($u.Enabled)" } else { "missing" })"'
+        )
     lines.append(windows_share_probe())
     for name, path in mounts:
         check = ps('filesystem:' + name)
@@ -458,15 +507,47 @@ class ImageTestLauncher:
             checks.append(rebooted)
             return checks
         finally:
+            self._capture_failed_launch(record, checks, session)
             self._delete(session, stack)
+
+    def _capture_failed_launch(self, record, checks, session):
+        """the test desktop is the host that failed; the builder went before it launched."""
+        failed = next((c for c in checks if c.ok is False), None)
+        if failed is None or session is None:
+            return
+        try:
+            current = self._get(session) or session
+            instance_id = getattr(current.server, 'instance_id', None)
+            cause = capture_failure(
+                self.context,
+                self._logger,
+                FailedHost(
+                    kind='desktop_bake',
+                    identifier=record.ami_name
+                    or f'{record.base_os}/{record.architecture}',
+                    instance_id=instance_id,
+                    failure=failed.name,
+                    os=record.base_os,
+                    arch=record.architecture,
+                    ami=record.image_id,
+                    instance_type=getattr(current.server, 'instance_type', None),
+                    release=record.release,
+                    log_group=dcv_host_log_group(self.context),
+                    log_stream=BOOTSTRAP_LOG_STREAM.format(instance_id=instance_id),
+                ),
+            )
+            if cause:
+                # first: the row's error keeps only the start of the detail
+                failed.detail = f'{cause} {failed.detail}'[:500]
+        except Exception as e:
+            self._logger.warning(
+                f'could not read the failed test desktop: {type(e).__name__}'
+            )
 
     def _candidate_stack(self, record, base_stack, project, variant):
         stack = base_stack.model_copy(deep=True)
         suffix = '' if variant == 'cpu' else f'-{variant}'
-        stack.stack_id = (
-            f'{VALIDATION_STACK_PREFIX}{record.base_os}-'
-            f'{record.architecture.replace("_", "-")}{suffix}'
-        )
+        stack.stack_id = validation_stack_id(record, variant)
         stack.name = f'Image validation {record.base_os} {record.architecture}{suffix}'
         stack.description = 'hidden: candidate image under validation'
         stack.ami_id = record.image_id
@@ -483,9 +564,8 @@ class ImageTestLauncher:
 
     def _launch(self, record, stack, project, settings, variant):
         started = self.clock()
-        suffix = '' if variant == 'cpu' else f'-{variant}'
         session = VirtualDesktopSession(
-            name=f'{VALIDATION_NAME_PREFIX}{record.base_os}-{record.architecture}{suffix}',
+            name=validation_session_name(record, variant),
             owner=settings.validation_user,
             project=project,
             software_stack=VirtualDesktopSoftwareStack(
@@ -626,7 +706,19 @@ class ImageTestLauncher:
         checks = [self._bootstrap_tag(session), self._connection(session)]
         mounts = shared_filesystems(self.context.config(), windows)
         script = (
-            windows_host_script(session.dcv_session_id, mounts, variant)
+            windows_host_script(
+                session.dcv_session_id,
+                mounts,
+                variant,
+                user=settings.validation_user,
+                active_directory=self.context.config().get_string(
+                    'directoryservice.provider', required=True
+                )
+                in {
+                    constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY,
+                    constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
+                },
+            )
             if windows
             else linux_host_script(
                 session.dcv_session_id, settings.validation_user, mounts, variant
@@ -776,6 +868,11 @@ class ImageTestLauncher:
 
     def _reboot(self, session, gate: int) -> ImageCheck:
         started = self.clock()
+        # the reboot event of the host's own bootstrap can arrive after READY and put the
+        # session back in INITIALIZING for a moment, and a reboot is refused until it settles
+        settled = self._wait_ready(session, gate, 'reboot_ready')
+        if not settled.ok:
+            return settled
         session.force = True
         _, failed = self.api.session_utils.reboot_sessions([session])
         if failed:
@@ -807,20 +904,39 @@ class ImageTestLauncher:
 
     # cleanup
 
+    def _validation_sessions(self, settings: ImagePipelineSettings) -> List:
+        return self.api.session_db.list_for_owner(settings.validation_user)
+
+    def discard(self, record, settings: ImagePipelineSettings) -> List[str]:
+        """
+        one bake's test desktop and candidate stack, when its worker cannot clean up after
+        itself. a desktop is the bake's only by owner and exact name, the stack by its id, and
+        both name the bake, so a retry's are never touched
+        """
+        variant = getattr(record.variant, 'value', record.variant) or 'cpu'
+        name = validation_session_name(record, variant)
+        discarded = []
+        for session in self._validation_sessions(settings):
+            if session.name != name:
+                continue
+            session.force = True
+            self.api.session_utils.terminate_sessions([session])
+            discarded.append(session.idea_session_id)
+        stack = self.api.software_stack_db.get(
+            validation_stack_id(record, variant), record.base_os
+        )
+        if stack is not None:
+            self.api.software_stack_db.delete(stack)
+        return discarded
+
     def reap(self, settings: ImagePipelineSettings, older_than: timedelta) -> List[str]:
         """delete validation desktops older than older_than (a test launch never takes that long)"""
-        table = self.api.session_db._table
-        from boto3.dynamodb.conditions import Key
-
-        items = table.query(
-            KeyConditionExpression=Key(sessions_constants.USER_SESSION_DB_HASH_KEY).eq(
-                settings.validation_user
-            )
-        ).get('Items', [])
         cutoff = datetime.now(tz=timezone.utc) - older_than
         reaped = []
-        for item in items:
-            session = self.api.session_db.convert_db_dict_to_session_object(item)
+        for session in self._validation_sessions(settings):
+            # only test launches, even if the validation account owns other desktops
+            if not (session.name or '').startswith(VALIDATION_NAME_PREFIX):
+                continue
             created = session.created_on
             if created is not None and created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
@@ -831,4 +947,26 @@ class ImageTestLauncher:
             reaped.append(session.idea_session_id)
         if reaped:
             self._logger.warning(f'deleted validation desktops left behind: {reaped}')
+        self._reap_stacks(cutoff)
         return reaped
+
+    def _reap_stacks(self, cutoff: datetime):
+        """a stack names one bake, so the next bake no longer replaces one its worker left"""
+        cursor = None
+        while True:
+            page = self.api.software_stack_db.list_all_from_db(
+                ListSoftwareStackRequest(paginator=SocaPaginator(cursor=cursor))
+            )
+            for stack in page.listing or []:
+                created = stack.created_on
+                if created is not None and created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if (
+                    (stack.stack_id or '').startswith(VALIDATION_STACK_PREFIX)
+                    and created is not None
+                    and created <= cutoff
+                ):
+                    self.api.software_stack_db.delete(stack)
+            cursor = page.cursor
+            if Utils.is_empty(cursor):
+                return

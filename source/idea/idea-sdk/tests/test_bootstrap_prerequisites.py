@@ -29,12 +29,18 @@ COMMON = (
         'no-cli',
         'download',
         'archive',
+        'signature',
+        'signature-unreachable',
+        'signature-once',
+        'no-gpg',
+        'al2023-minimal',
     ],
 )
 def test_userdata_prerequisites(tmp_path, implementation, substitution, scenario):
+    base_os = 'amazonlinux2023' if scenario == 'al2023-minimal' else 'ubuntu2604'
     body = (
         BootstrapUserDataBuilder(
-            base_os='ubuntu2604',
+            base_os=base_os,
             aws_region='us-east-1',
             bootstrap_package_uri='s3://bucket/bootstrap.tar.gz',
             install_commands=['echo SETUP_REACHED'],
@@ -46,7 +52,7 @@ def test_userdata_prerequisites(tmp_path, implementation, substitution, scenario
     if implementation == 'cdk':
         module = COMMON.parents[2] / 'ideactl/src/cdk/userdata.ts'
         params = dict(
-            baseOs='ubuntu2604',
+            baseOs=base_os,
             awsRegion='us-east-1',
             bootstrapPackageUri='s3://bucket/bootstrap.tar.gz',
             installCommands=['echo SETUP_REACHED'],
@@ -70,13 +76,39 @@ def test_userdata_prerequisites(tmp_path, implementation, substitution, scenario
     mocks = r"""
 command() {
   [[ "$*" != '-v unzip' ]] || return 1
+  [[ "$*" != '-v gpg' || "$SCENARIO" != no-gpg ]] || return 1
   [[ "$*" != '-v aws' || "$SCENARIO" != no-cli ]] || return 1
   builtin command "$@"
 }
 which() { command -v "$@"; }
 sleep() { :; }
 uname() { echo aarch64; }
-curl() { [[ "$SCENARIO" != curl ]] || return 22; echo test-region; }
+curl() {
+  [[ "$SCENARIO" != curl ]] || return 22
+  # curl-minimal speaks http and https only
+  [[ "$SCENARIO" != al2023-minimal || "$*" == *http://* || "$*" == *https://* ]] || return 1
+  [[ "$* " != *'.sig '* || "$SCENARIO" != signature-unreachable ]] || return 7
+  echo test-region
+}
+# a valid signature names the primary key fingerprint last on its VALIDSIG status line
+gpg() {
+  # gnupg2-minimal ships gpg alone: importing a new key probes gpg-agent for its secret
+  # key, and a failed agent start is an error (exit 2) even though the key was imported
+  if [[ "$SCENARIO" == al2023-minimal && " $* " == *' --import '* && " $* " != *' --no-autostart '* ]]; then
+    echo "gpg: failed to start agent '/usr/bin/gpg-agent': No such file or directory" >&2
+    echo "gpg: can't connect to the agent: No such file or directory" >&2
+    return 2
+  fi
+  [[ " $* " == *' --verify '* ]] || return 0
+  local fingerprint=FB5DB77FD5C118B80511ADA8A6310ACC4672475C
+  [[ "$SCENARIO" != signature ]] || fingerprint=0000000000000000000000000000000000000000
+  # a release published between the two downloads: the first pair does not match
+  if [[ "$SCENARIO" == signature-once && ! -f "$UPDATED.sig-seen" ]]; then
+    touch "$UPDATED.sig-seen"
+    fingerprint=0000000000000000000000000000000000000000
+  fi
+  echo "[GNUPG:] VALIDSIG $fingerprint 2026-01-01 0 0 4 0 1 10 00 $fingerprint"
+}
 attempts=0
 apt-get() {
   echo "$*" >> "$CALLS"
@@ -93,6 +125,7 @@ apt-get() {
   fi
 }
 apt() { apt-get "$@"; }
+yum() { echo "yum $*" >> "$CALLS"; }
 unzip() {
   [[ "$SCENARIO" != unzip ]] || return 9
   mkdir -p aws
@@ -121,7 +154,12 @@ export -f aws curl tar
     )
     log = (tmp_path / 'logs/userdata.log').read_text()
     calls = (tmp_path / 'calls').read_text() if (tmp_path / 'calls').exists() else ''
-    if scenario in ('success', 'update-lag'):
+    if scenario == 'al2023-minimal':
+        assert result.returncode == 0, log
+        assert 'SETUP_REACHED' in log
+        # the image's CLI goes only after the installer verified
+        assert calls.index('yum remove -y awscli') < calls.index('yum install -y unzip')
+    elif scenario in ('success', 'update-lag', 'signature-once', 'no-gpg'):
         assert result.returncode == 0, log
         assert 'SETUP_REACHED' in log
         assert calls.index('update') < calls.index('install -y unzip')
@@ -132,6 +170,19 @@ export -f aws curl tar
         assert 'userdata failed:' in log
         if scenario in ('download', 'archive'):
             assert 'Value=bootstrap-download-failed' in calls
+        if scenario.startswith('signature'):
+            # nothing unverified is unpacked or installed
+            assert 'unzip' not in calls and not (tmp_path / 'aws').exists()
+            assert 'userdata failed: aws-cli' in log
+        if scenario == 'signature':
+            assert 'is not signed by the AWS CLI key FB5DB77F' in log
+        if scenario == 'signature-unreachable':
+            assert 'Could not download the AWS CLI signature' in log
+    if scenario == 'signature-once':
+        assert 'fetching it and its signature again' in log
+    if scenario == 'no-gpg':
+        # the package index is refreshed before gpg is installed
+        assert calls.index('update') < calls.index('install -y gpg')
     if scenario == 'update-lag':
         assert calls.count('update') == 3
         assert '[retried] E: Failed to fetch package index' in log
@@ -356,3 +407,111 @@ echo INSTALL_REACHED
     )
     assert result.returncode == 0
     assert '[WARNING]' in result.stdout and 'INSTALL_REACHED' in result.stdout
+
+
+# EC2 accepts at most 16384 bytes of user data before base64. The largest script either
+# builder makes must leave 4096 bytes of that free.
+USER_DATA_LIMIT = 16384
+USER_DATA_MARGIN = 4096
+LINUX_BASE_OS = [
+    'amazonlinux2023',
+    'rhel8',
+    'rhel9',
+    'rhel10',
+    'rocky8',
+    'rocky9',
+    'rocky10',
+    'ubuntu2204',
+    'ubuntu2404',
+    'ubuntu2604',
+]
+
+
+def largest_user_data_inputs():
+    """Worst case of what the product passes: the long GovCloud no_proxy list from the
+    cluster settings template, a long proxy URL, a long package URI, the four OpenLDAP
+    secret ARNs, and every install command any caller uses."""
+    region, suffix = 'us-gov-west-1', 'amazonaws.com'
+    services = (
+        's3 s3.dualstack dynamodb sqs ec2 secretsmanager sns cloudformation '
+        'elasticloadbalancing monitoring logs ssm application-autoscaling events '
+        'kinesis autoscaling'
+    ).split()
+    no_proxy = ','.join(
+        ['127.0.0.1', '169.254.169.254', 'localhost', f'{region}.local']
+        + [f'{region}.vpce.{suffix}', f'{region}.es.{suffix}', f'{region}.elb.{suffix}']
+        + [f'{name}.{region}.{suffix}' for name in services]
+    )
+    proxy = 'http://proxy.' + 'x' * 60 + '.example.invalid:3128'
+    arn = f'arn:aws-us-gov:secretsmanager:{region}:123456789012:secret:' + 'x' * 120
+    return dict(
+        aws_region=region,
+        bootstrap_package_uri='s3://'
+        + 'b' * 63
+        + '/idea/'
+        + 'm' * 40
+        + '/bootstrap/'
+        + 'p' * 120
+        + '.tar.gz',
+        install_commands=[
+            f'/bin/bash {component}/setup.sh'
+            for component in (
+                'compute-node',
+                'compute-node-ami-builder',
+                'dcv-host-ami-builder',
+                'virtual-desktop-host-linux',
+                'openldap-server',
+            )
+        ],
+        infra_config={
+            f'LDAP_{name}_SECRET_ARN': arn
+            for name in (
+                'ROOT_USERNAME',
+                'ROOT_PASSWORD',
+                'TLS_CERTIFICATE',
+                'TLS_PRIVATE_KEY',
+            )
+        },
+        proxy_config={'http_proxy': proxy, 'https_proxy': proxy, 'no_proxy': no_proxy},
+    )
+
+
+def test_largest_user_data_fits_the_ec2_limit():
+    inputs = largest_user_data_inputs()
+    module = COMMON.parents[2] / 'ideactl/src/cdk/userdata.ts'
+    sizes = {}
+    for base_os in LINUX_BASE_OS:
+        for substitution in (True, False):
+            sdk = BootstrapUserDataBuilder(
+                base_os=base_os,
+                substitution_support=substitution,
+                **{
+                    **inputs,
+                    'infra_config': inputs['infra_config'] if substitution else None,
+                },
+            ).build()
+            params = dict(
+                baseOs=base_os,
+                awsRegion=inputs['aws_region'],
+                bootstrapPackageUri=inputs['bootstrap_package_uri'],
+                installCommands=inputs['install_commands'],
+                infraConfig=inputs['infra_config'] if substitution else None,
+                proxyConfig=inputs['proxy_config'],
+                substitutionSupport=substitution,
+            )
+            cdk = subprocess.check_output(
+                [
+                    'node',
+                    '--input-type=module',
+                    '-e',
+                    f'import {{ buildBootstrapUserData }} from {json.dumps(str(module))}; process.stdout.write(buildBootstrapUserData({json.dumps(params)}));',
+                ],
+                text=True,
+            )
+            sizes[(base_os, substitution, 'sdk')] = len(sdk.encode())
+            sizes[(base_os, substitution, 'cdk')] = len(cdk.encode())
+    largest = max(sizes.values())
+    assert largest <= USER_DATA_LIMIT - USER_DATA_MARGIN, sizes
+    # the check is in both builders, in the form the CloudFormation variant leaves alone
+    assert 'verify_aws_cli_signature || return $?' in cdk
+    assert 'AWS_CLI_KEY_FINGERPRINT=FB5DB77FD5C118B80511ADA8A6310ACC4672475C' in cdk

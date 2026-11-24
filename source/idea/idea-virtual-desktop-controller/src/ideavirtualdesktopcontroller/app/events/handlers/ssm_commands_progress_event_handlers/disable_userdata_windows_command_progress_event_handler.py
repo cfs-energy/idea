@@ -20,6 +20,9 @@ from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import 
 )
 
 
+CAPTURE_CLEANUP_FAILED_MESSAGE = 'The cleanup after the image capture did not finish. Reboot the desktop, or contact your administrator.'
+
+
 class DisableUserdataWindowsCommandProgressEventListener(
     BaseVirtualDesktopControllerEventHandler
 ):
@@ -43,20 +46,21 @@ class DisableUserdataWindowsCommandProgressEventListener(
             'idea_session_owner', event.detail, None
         )
         command_id = Utils.get_value_as_string('command_id', event.detail, None)
-        if status in {'Success', 'Failed'}:
+        if status in {'Success', 'Failed', 'TimedOut', 'Cancelled'}:
             session = self.session_db.get_from_db(
                 idea_session_owner=idea_session_owner, idea_session_id=idea_session_id
             )
+            # the capture is over either way: the desktop is unlocked for its owner
+            session.locked = False
+            session.server.locked = False
             if status == 'Success':
-                session.locked = False
-                session.server.locked = False
                 self.ssm_commands_db.delete(command_id=command_id)
             else:
-                # FAILED
                 session.state = VirtualDesktopSessionState.ERROR
+                session.failure_reason = CAPTURE_CLEANUP_FAILED_MESSAGE
                 self.log_error(
                     message_id=message_id,
-                    message=f'Session: {session.idea_session_id}:{session.name} moved to Error state',
+                    message=f'Session: {session.idea_session_id}:{session.name} moved to Error state: the cleanup after the image capture ended {status}',
                 )
 
             _ = self.server_db.update(session.server)

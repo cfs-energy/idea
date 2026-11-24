@@ -11,19 +11,20 @@
  * and limitations under the License.
  */
 
+import {IdeaFormValidate} from "../../components/form-field/form-field";
 import React, {Component, RefObject} from "react";
 
 import IdeaWizard from '../../components/wizard'
 import Utils from "../../common/utils";
 import {AppContext} from "../../common";
-import {HpcQueueProfile, Project} from "../../client/data-model";
-import {QueueUtils} from "./hpc-utils";
-import dot from "dot-object";
+import {HpcQueueProfile, Project, SocaUserInputParamMetadata} from "../../client/data-model";
+import {allowNewFsxLustreInitialValue, fsxThroughputFormValues, prepareQueueProfileForSave, SCRATCH_OFF_NOTICE, SCRATCH_PROVIDER_NOTICE, scratchProviderShown, snapshotQueueProfile, SPOT_OFF_NOTICE} from "./hpc-utils";
 import {SchedulerAdminClient} from "../../client";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
 import {Box} from "@cloudscape-design/components";
+import {listAllProjects} from "./hpc-utils";
 
 export interface HpcUpdateQueueProfileProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -34,9 +35,12 @@ export interface HpcUpdateQueueProfileState {
     isCreate: boolean
     queueProfileId?: string
     projects: Project[]
+    // the profile as last loaded or saved: deep-copied and frozen, never bound to the form,
+    // which edits its values in place
+    loaded: any
 }
 
-class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpdateQueueProfileState> {
+export class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpdateQueueProfileState> {
 
     wizard: RefObject<IdeaWizard | null>
 
@@ -47,7 +51,8 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
             queueProfile: {},
             isCreate: this.props.location.pathname.startsWith('/soca/queues/create'),
             queueProfileId: '',
-            projects: []
+            projects: [],
+            loaded: snapshotQueueProfile({})
         }
     }
 
@@ -76,7 +81,8 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
             }).then(result => {
                 this.setState({
                     queueProfile: result.queue_profile,
-                    queueProfileId: queueProfileId
+                    queueProfileId: queueProfileId,
+                    loaded: snapshotQueueProfile(result.queue_profile)
                 })
             })
         }
@@ -95,9 +101,17 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
         this.state.queueProfile?.projects?.forEach(project => {
             project_ids.push(project.project_id)
         })
+        // a deep copy: the wizard edits its values in place, and a shallow spread let it edit
+        // the page's profile too (round 5 B1)
+        const queueProfile = JSON.parse(JSON.stringify(this.state.queueProfile || {}))
         return {
-            ...this.state.queueProfile,
-            project_ids: project_ids
+            ...queueProfile,
+            queue_management_params: {
+                ...queueProfile.queue_management_params,
+                allow_new_fsx_lustre: allowNewFsxLustreInitialValue(this.isCreate(), this.state.queueProfile)
+            },
+            project_ids: project_ids,
+            fsx_lustre_throughput: fsxThroughputFormValues(this.state.queueProfile?.default_job_params?.fsx_lustre)
         }
     }
 
@@ -139,13 +153,9 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                         values={this.getValues()}
                         onFetchOptions={(request) => {
                             if (request.param === 'project_ids') {
-                                return AppContext.get().client().projects().listProjects({
-                                    paginator: {
-                                        page_size: 100
-                                    }
-                                }).then(result => {
+                                return listAllProjects(AppContext.get().client().projects()).then(projects => {
                                     let choices: any = []
-                                    result.listing?.forEach(project => {
+                                    projects.forEach(project => {
                                         choices.push({
                                             title: project.title,
                                             value: project.project_id,
@@ -182,8 +192,9 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     data_type: 'str',
                                                     validate: {
                                                         required: true,
-                                                        regex: '^([a-z0-9-]+){3,18}$'
-                                                    }
+                                                        regex: '^[a-z0-9-]{3,}$',
+                                                        message: 'Use at least 3 lowercase letters, digits or hyphens.'
+                                                    } as IdeaFormValidate
                                                 },
                                                 {
                                                     name: 'title',
@@ -393,6 +404,14 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     multiple: true
                                                 },
                                                 {
+                                                    name: 'queue_management_params.allow_new_fsx_lustre',
+                                                    title: 'Jobs may create a new FSx for Lustre',
+                                                    description: 'Lets jobs on this queue create a new FSx for Lustre file system for their scratch storage (fsx_lustre=true or an S3 bucket). The file system is billed while the job runs. Mounting an existing file system is not affected.',
+                                                    param_type: 'confirm',
+                                                    data_type: 'bool',
+                                                    default: false
+                                                },
+                                                {
                                                     name: 'queue_management_params.allowed_security_groups',
                                                     title: 'Allowed Security Groups',
                                                     description: 'List of additional security group(s) users can override via the security_groups parameter',
@@ -556,6 +575,16 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                         required: true
                                                     }
                                                 },
+                                                // shown only when this edit turns stored Spot off
+                                                ...(this.state.loaded?.default_job_params?.spot === true ? [{
+                                                    name: SPOT_OFF_NOTICE,
+                                                    title: 'Saving with Spot off clears this queue\'s stored Spot price, allocation count and allocation strategy.',
+                                                    param_type: 'paragraph',
+                                                    when: {
+                                                        param: 'default_job_params.spot',
+                                                        eq: false
+                                                    }
+                                                } as SocaUserInputParamMetadata] : []),
                                                 {
                                                     name: 'default_job_params.spot_price',
                                                     title: 'Spot Price',
@@ -672,6 +701,16 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     data_type: 'bool',
                                                     default: false
                                                 },
+                                                // shown only when this edit turns stored scratch off
+                                                ...(this.state.loaded?.default_job_params?.enable_scratch === true ? [{
+                                                    name: SCRATCH_OFF_NOTICE,
+                                                    title: 'Saving with scratch storage off clears this queue\'s stored scratch and FSx for Lustre defaults (file system, bucket, paths, type, throughput and size). Turning scratch on again later starts from empty fields.',
+                                                    param_type: 'paragraph',
+                                                    when: {
+                                                        param: 'default_job_params.enable_scratch',
+                                                        eq: false
+                                                    }
+                                                } as SocaUserInputParamMetadata] : []),
                                                 {
                                                     name: 'default_job_params.scratch_provider',
                                                     title: 'Scratch Provider',
@@ -697,6 +736,24 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                         eq: true
                                                     }
                                                 },
+                                                // shown only when this edit switches a stored scratch provider
+                                                ...(this.state.loaded?.default_job_params?.enable_scratch === true ? [{
+                                                    name: SCRATCH_PROVIDER_NOTICE,
+                                                    title: 'Saving with another scratch provider clears the stored settings of the provider this queue had (EBS size and IOPS, or the FSx for Lustre file system).',
+                                                    param_type: 'paragraph',
+                                                    when: {
+                                                        and: [
+                                                            {
+                                                                param: 'default_job_params.enable_scratch',
+                                                                eq: true
+                                                            },
+                                                            {
+                                                                param: 'default_job_params.scratch_provider',
+                                                                not_eq: scratchProviderShown(this.state.loaded)
+                                                            }
+                                                        ]
+                                                    }
+                                                } as SocaUserInputParamMetadata] : []),
                                                 {
                                                     name: 'default_job_params.scratch_storage_size',
                                                     title: 'Scratch Storage Size',
@@ -741,7 +798,8 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                 {
                                                     name: 'default_job_params.fsx_lustre.existing_fsx',
                                                     title: 'Existing FSx for Lustre',
-                                                    param_type: 'select',
+                                                    description: 'DNS name of the file system, for example fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com. Jobs on this queue that name no FSx for Lustre mount it.',
+                                                    param_type: 'text',
                                                     data_type: 'str',
                                                     when: {
                                                         and: [
@@ -828,6 +886,10 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                         {
                                                             title: 'PERSISTENT_1',
                                                             value: 'persistent_1'
+                                                        },
+                                                        {
+                                                            title: 'PERSISTENT_2',
+                                                            value: 'persistent_2'
                                                         }
                                                     ],
                                                     when: {
@@ -844,11 +906,11 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     }
                                                 },
                                                 {
-                                                    name: 'default_job_params.fsx_lustre.per_unit_throughput',
-                                                    title: 'Per Unit Throughput',
+                                                    name: 'fsx_lustre_throughput.persistent_1',
+                                                    title: 'Per Unit Throughput (MB/s/TiB)',
                                                     param_type: 'select',
                                                     data_type: 'int',
-                                                    default: '50',
+                                                    default: '200',
                                                     choices: [
                                                         {
                                                             title: '50',
@@ -872,6 +934,51 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                             {
                                                                 param: 'default_job_params.enable_scratch',
                                                                 eq: true
+                                                            },
+                                                            {
+                                                                param: 'default_job_params.fsx_lustre.deployment_type',
+                                                                eq: 'persistent_1'
+                                                            }
+                                                        ]
+                                                    }
+                                                },
+                                                {
+                                                    name: 'fsx_lustre_throughput.persistent_2',
+                                                    title: 'Per Unit Throughput (MB/s/TiB)',
+                                                    param_type: 'select',
+                                                    data_type: 'int',
+                                                    default: '125',
+                                                    choices: [
+                                                        {
+                                                            title: '125',
+                                                            value: '125'
+                                                        },
+                                                        {
+                                                            title: '250',
+                                                            value: '250'
+                                                        },
+                                                        {
+                                                            title: '500',
+                                                            value: '500'
+                                                        },
+                                                        {
+                                                            title: '1000',
+                                                            value: '1000'
+                                                        }
+                                                    ],
+                                                    when: {
+                                                        and: [
+                                                            {
+                                                                param: 'default_job_params.scratch_provider',
+                                                                eq: 'fsx-lustre-new'
+                                                            },
+                                                            {
+                                                                param: 'default_job_params.enable_scratch',
+                                                                eq: true
+                                                            },
+                                                            {
+                                                                param: 'default_job_params.fsx_lustre.deployment_type',
+                                                                eq: 'persistent_2'
                                                             }
                                                         ]
                                                     }
@@ -946,48 +1053,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                         }}
                         onSubmit={() => {
                             const queueProfile = this.getWizard().getValues()
-                            const project_ids = dot.pick('project_ids', queueProfile, true)
-                            let projects: any = []
-                            queueProfile.projects = projects
-                            project_ids.forEach((project_id: string) => {
-                                projects.push({
-                                    project_id: project_id
-                                })
-                            })
-                            const utils = new QueueUtils(queueProfile)
-
-                            let keep_forever = Utils.asBoolean(dot.pick('keep_forever', queueProfile), false)
-                            if (keep_forever) {
-                                dot.del('scaling_mode', queueProfile)
-                            } else {
-                                const scalingMode = dot.pick('scaling_mode', queueProfile)
-                                if (scalingMode === 'single-job') {
-                                    queueProfile.terminate_when_idle = 0
-                                }
-                            }
-
-                            if (utils.isScratchStorageEnabled()) {
-                                if (utils.isScratchEBS()) {
-                                    dot.del('default_job_params.fsx_lustre', queueProfile)
-                                } else if (utils.isScratchFsxLustre()) {
-                                    dot.del('default_job_params.scratch_storage_size', queueProfile)
-                                    dot.del('default_job_params.scratch_storage_iops', queueProfile)
-                                    dot.str('default_job_params.fsx_lustre.enabled', true, queueProfile)
-                                }
-                            } else {
-                                dot.del('default_job_params.scratch_provider', queueProfile)
-                                dot.del('default_job_params.scratch_storage_size', queueProfile)
-                                dot.del('default_job_params.scratch_storage_iops', queueProfile)
-                                dot.del('default_job_params.fsx_lustre', queueProfile)
-                                dot.str('default_job_params.fsx_lustre', {
-                                    enabled: false
-                                }, queueProfile)
-                            }
-                            if (!utils.isEnableSpot()) {
-                                dot.del('default_job_params.spot_price', queueProfile)
-                                dot.del('default_job_params.spot_allocation_count', queueProfile)
-                                dot.del('default_job_params.spot_allocation_strategy', queueProfile)
-                            }
+                            prepareQueueProfileForSave(queueProfile, this.state.loaded)
 
                             let invoke
                             if (this.isCreate()) {
@@ -998,7 +1064,9 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
 
                             return invoke({
                                 queue_profile: queueProfile
-                            }).then(_ => {
+                            }).then(result => {
+                                // a later save in this page compares against what was saved
+                                this.setState({loaded: snapshotQueueProfile(result?.queue_profile ?? queueProfile)})
                                 this.props.navigate('/soca/queues')
                                 return true
                             }, error => {
@@ -1008,7 +1076,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                         <div>
                                             <div><Box variant="strong">{error.message}</Box></div>
                                             {error.payload.validation_errors.results.map((entry: any) => {
-                                                return <li>({entry.error_code}) {entry.message}</li>
+                                                return <li>{entry.message}</li>
                                             })}
                                         </div>
                                     )

@@ -11,6 +11,7 @@
 
 from ideadatamodel import exceptions, errorcodes, constants
 from ideasdk.utils import Utils
+from ideasdk.context import ArnBuilder
 from ideadatamodel.common import SocaMemory, SocaMemoryUnit, SocaAmount
 from ideadatamodel.scheduler import (
     SocaSpotAllocationStrategy,
@@ -42,6 +43,50 @@ from collections import OrderedDict
 import random
 import re
 
+# values below are rendered into the root bootstrap of a compute node, so each one is held
+# to the characters its real form uses.
+EXISTING_FSX_PATTERN = re.compile(
+    r'fs-[0-9a-f]{8,17}\.fsx\.[a-z0-9-]+\.amazonaws\.com(\.cn)?'
+)
+JOB_GROUP_PATTERN = re.compile(r'custom-[a-z0-9]{1,10}')
+# every form a job_uid has taken: shortuuid (the hook and SubmitJob, all releases), a
+# uuid4 (the always-on pool action), and a submitter's own -l job_uid, where an underscore
+# is common. no dot (a path element), space, quote or shell character
+JOB_UID_PATTERN = re.compile(r'[A-Za-z0-9_-]{1,64}')
+# the group get_job_group() computes when the job names none
+COMPUTED_JOB_GROUP_PATTERN = re.compile(r'g[0-9a-f]{8}')
+
+
+def stored_job_identity_error(job) -> Optional[str]:
+    """
+    job_uid and job_group name the job directory, the bootstrap package, its S3 key and
+    URI, all rendered into a compute node's root bootstrap. they are checked at
+    submission, but a job queued before that check (an earlier release) carries values
+    never checked: read back from the scheduler, they are checked again before any of
+    those is built (U03). the reason has no commas: qalter splits on them.
+    """
+    if not JOB_UID_PATTERN.fullmatch(str(job.job_uid or '')):
+        return (
+            'job_uid can only contain letters digits underscores and dashes (1 to 64). '
+            'Delete this job and resubmit it without job_uid'
+        )
+    # a group the job does not carry is computed from its own parameters: always g + hex
+    job_group = job.job_group or (job.params.job_group if job.params else None)
+    if job_group is not None and not (
+        JOB_GROUP_PATTERN.fullmatch(job_group)
+        or COMPUTED_JOB_GROUP_PATTERN.fullmatch(job_group)
+    ):
+        return (
+            f'{constants.JOB_PARAM_JOB_GROUP} must be custom- followed by 1 to 10 '
+            f'lowercase letters or digits. Delete this job and resubmit it with a valid '
+            f'{constants.JOB_PARAM_JOB_GROUP}'
+        )
+    return None
+
+
+# tag keys the product sets or reads on compute resources, or that AWS reserves.
+RESERVED_TAG_KEY_PREFIXES = ('idea:', 'aws:')
+
 JOB_PARAM_INFO = {
     constants.JOB_PARAM_NODES: JobParameterInfo(
         name=constants.JOB_PARAM_NODES,
@@ -52,16 +97,22 @@ JOB_PARAM_INFO = {
         name=constants.JOB_PARAM_CPUS,
         title='CPUs',
         description='No. of CPUs required for the Job.',
+        # a restriction typed with the PBS name matches too (SJP-19)
+        provider_names={constants.SCHEDULER_OPENPBS: 'ncpus'},
     ),
     constants.JOB_PARAM_MEMORY: JobParameterInfo(
         name=constants.JOB_PARAM_MEMORY,
         title='Memory',
         description='Memory required for the Job.',
+        # a restriction typed with the PBS name matches too (SJP-19)
+        provider_names={constants.SCHEDULER_OPENPBS: 'mem'},
     ),
     constants.JOB_PARAM_GPUS: JobParameterInfo(
         name=constants.JOB_PARAM_GPUS,
         title='GPUs',
         description='No. of GPUs required for the Job.',
+        # a restriction typed with the PBS name matches too (SJP-19)
+        provider_names={constants.SCHEDULER_OPENPBS: 'ngpus'},
     ),
     constants.JOB_PARAM_MPIPROCS: JobParameterInfo(
         name=constants.JOB_PARAM_MPIPROCS,
@@ -237,6 +288,8 @@ JOB_PARAM_INFO = {
         name=constants.JOB_PARAM_COMPUTE_STACK,
         title='Compute Stack',
         description='Specifies the AWS CloudFormation Stack Name under which Job resources are provisioned.',
+        # a restriction typed with the PBS name matches too (SJP-19)
+        provider_names={constants.SCHEDULER_OPENPBS: 'compute_node'},
     ),
     constants.JOB_PARAM_JOB_GROUP: JobParameterInfo(
         name=constants.JOB_PARAM_JOB_GROUP,
@@ -434,7 +487,8 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             return True
 
         self.add_validation_entry(
-            param=param, message=f'Job parameter: [{param}] is required.'
+            param=param,
+            message=f'This job needs {param}. Set it with #PBS -l {param}=<value>.',
         )
         return False
 
@@ -472,8 +526,13 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
         ):
             return None
 
+        # a job that does not mention Spot inherits the queue's default: reading the
+        # request alone called a Spot queue's job on-demand, and the template failed on
+        # the missing allocation strategy (SJP-16)
         nodes_builder = self.context.get_builder(constants.JOB_PARAM_NODES)
         nodes = nodes_builder.get()
+        if nodes is None:
+            nodes = nodes_builder.default()
         if nodes is None:
             return None
 
@@ -481,6 +540,8 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             constants.JOB_PARAM_SPOT
         )
         spot = spot_param_builder.get()
+        if spot is None:
+            spot = spot_param_builder.default()
         if not Utils.is_true(spot):
             return SocaCapacityType.ONDEMAND
 
@@ -488,6 +549,8 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             constants.JOB_PARAM_SPOT_ALLOCATION_COUNT
         )
         spot_allocation_count = spot_allocation_count_builder.get()
+        if spot_allocation_count is None:
+            spot_allocation_count = spot_allocation_count_builder.default()
 
         if spot_allocation_count is None or spot_allocation_count <= 0:
             return SocaCapacityType.SPOT
@@ -547,8 +610,8 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             ):
                 self.add_validation_entry(
                     param=param_name_to_check,
-                    message=f'{param_name_to_check} is restricted for queue: ({job_queue}) '
-                    f'and cannot be submitted as a job parameter by the user.',
+                    message=f"Queue {job_queue} doesn't let jobs set {param_name_to_check}. "
+                    f'Remove it from your job script.',
                 )
                 return True
             return False
@@ -715,8 +778,9 @@ class CpusParamBuilder(BaseParamBuilder):
                 )
             else:
                 message = (
-                    f'Invalid {constants.JOB_PARAM_CPUS}: ({cpus}). One of the instance types: [{",".join(instance_types)}]'
-                    f' do not have enough CPUs: ({min_cpus}). ht_support={enable_ht_support}'
+                    f'This job asks for {cpus} CPUs per machine, and the smallest of '
+                    f'{", ".join(instance_types)} has {min_cpus}. Ask for {min_cpus} or fewer, '
+                    f'or choose a larger instance type.'
                 )
             self.add_validation_entry(
                 param=constants.JOB_PARAM_CPUS,
@@ -800,8 +864,9 @@ class MemoryParamBuilder(BaseParamBuilder):
         if memory > min_memory:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_MEMORY,
-                message=f'applicable instance types do not have sufficient memory requested for this job. '
-                f'requested memory: {memory}, instance type memory (min): {min_memory}',
+                message=f'This job asks for {memory} of memory per machine, and the smallest '
+                f'instance type for it has {min_memory}. Ask for less, or choose a larger '
+                f'instance type.',
             )
             return False
 
@@ -1308,7 +1373,9 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
         if Utils.is_empty(instance_types):
             return True
         subnets_builder = self.context.get_builder(constants.JOB_PARAM_SUBNET_IDS)
-        subnet_ids = subnets_builder.get() or subnets_builder.default()
+        # every subnet the job could be given, not the one default() draws: a draw that
+        # lands in a zone without the type refused a job another draw would place (SJP-17)
+        subnet_ids = subnets_builder.get() or subnets_builder.candidate_subnets()
         if Utils.is_empty(subnet_ids):
             return True
         aws_util = self.soca_context.aws_util()
@@ -1539,12 +1606,14 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             + queue_hint(
                 queues_where(
                     self.soca_context,
-                    lambda defaults: common_architectures
-                    & set.intersection(
-                        *[
-                            self._get_supported_architectures(instance_type=t)
-                            for t in defaults.instance_types
-                        ]
+                    lambda defaults: (
+                        common_architectures
+                        & set.intersection(
+                            *[
+                                self._get_supported_architectures(instance_type=t)
+                                for t in defaults.instance_types
+                            ]
+                        )
                     ),
                 ),
                 '/'.join(sorted(common_architectures)),
@@ -2032,6 +2101,27 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
             )
             success = False
 
+        # a new FSx for Lustre lives in one subnet, and the stack hands it the job's list
+        # (SCH-18): stack creation failed instead of the submission
+        fsx_builder = self.context.get_builder(constants.JOB_PARAM_FSX_LUSTRE)
+        fsx = fsx_builder.get()
+        creates_fsx = (
+            fsx is not None
+            and fsx.enabled is True
+            and fsx.existing_fsx is None
+            and not fsx_builder.uses_default_existing_fsx(fsx)
+        )
+        # a job's own request only: a queue profile's defaults are validated with no queue,
+        # and a stored profile with several default subnets and a new-FSx default (which
+        # gives an FSx job its first subnet) must stay savable (A-S4)
+        if creates_fsx and len(subnet_ids) > 1 and self.context.has_queue():
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_SUBNET_IDS,
+                message=f'When the job creates an FSx for Lustre file system, no. of '
+                f'{constants.JOB_PARAM_SUBNET_IDS} cannot be more than (1).',
+            )
+            success = False
+
         return success
 
     def get(self, raise_exc=False) -> Optional[List[str]]:
@@ -2096,21 +2186,62 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
             job_id
         )
 
+    def _subnets_offering_the_job(self, subnet_ids: List[str]) -> List[str]:
+        """
+        the subnets whose zone offers at least one of the job's instance types. a lookup
+        that fails counts as offered, as the submission check treats it (SJP-17).
+        """
+        types_builder = self.context.get_builder(constants.JOB_PARAM_INSTANCE_TYPES)
+        instance_types = types_builder.get() or types_builder.default()
+        if Utils.is_empty(instance_types):
+            return subnet_ids
+        aws_util = self.soca_context.aws_util()
+        offering = []
+        for subnet_id in subnet_ids:
+            zone = aws_util.get_subnet_availability_zone(subnet_id)
+            types = aws_util.get_instance_types_offered(zone) if zone else None
+            if types is None or any(t in types for t in instance_types):
+                offering.append(subnet_id)
+        return offering or subnet_ids
+
+    def candidate_subnets(self) -> List[str]:
+        """the subnets default() chooses from: the queue's, else the cluster's private ones"""
+        if self.default_job_params and not Utils.is_empty(
+            self.default_job_params.subnet_ids
+        ):
+            return self.default_job_params.subnet_ids
+        return self.context.soca_context.config().get_list(
+            'cluster.network.private_subnets', required=True
+        )
+
     def _single_subnet(self, subnet_ids: List[str]) -> str:
         """
         one subnet for a job that cannot spread across several: multi node on-demand, EFA
-        or a placement group. the preferred subnet takes the first attempt and every retry
-        draws from the others, so one zone out of capacity cannot burn the whole retry
-        budget. the pick is random when no preferred subnet is set.
+        or a placement group, chosen among the subnets whose zone offers the job's type.
+        the preferred subnet takes the first attempt and every retry draws from the
+        others, so one zone out of capacity cannot burn the whole retry budget. the pick
+        is random when no preferred subnet is set.
         """
+        subnet_ids = self._subnets_offering_the_job(subnet_ids)
         preferred = self._preferred_subnet_id(subnet_ids)
         if preferred is None:
-            return random.choice(subnet_ids)
+            return self._draw(subnet_ids)
         if self._provisioning_retry_count() == 0:
             return preferred
         others = [subnet_id for subnet_id in subnet_ids if subnet_id != preferred]
         # nothing to fall back to when the preferred subnet is the only candidate
-        return random.choice(others) if others else preferred
+        return self._draw(others) if others else preferred
+
+    def _draw(self, subnet_ids: List[str]) -> str:
+        # the same job and attempt draw the same subnet on every read and at submission:
+        # the subnet is in the job's group, which is stored at submission. the seed is the
+        # job's uid, the one identity it has from submission on (its PBS id comes later).
+        # a retry draws again. a build for no job (an estimate) stays random
+        job_uid = Utils.get_value_as_string('job_uid', self.params)
+        if Utils.is_empty(job_uid):
+            return random.choice(subnet_ids)
+        seed = f'{job_uid}:{self._provisioning_retry_count()}'
+        return random.Random(seed).choice(subnet_ids)
 
     def default(self) -> List[str]:
         default_subnet_ids = None
@@ -2157,7 +2288,9 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         )
         fsx_lustre = fsx_lustre_param_builder.get()
         if fsx_lustre is not None and fsx_lustre.enabled:
-            return [default_subnet_ids[0]]
+            # the first subnet whose zone offers the job's type, as the admission check
+            # read it: the first one alone failed at launch on every retry (SJP-17)
+            return [self._subnets_offering_the_job(default_subnet_ids)[0]]
 
         # if EFA is enabled, multiple subnets cannot be supported.
         enable_efa_support_builder = self.context.get_builder(
@@ -2305,6 +2438,24 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
                     message=bedrock_access.message,
                 )
                 return False
+            # a queue default stored before saving one was checked can name a project's
+            # instance profile; only the job's own project may run under it (SCH-05)
+            default = (
+                self.default_job_params.instance_profile
+                if self.default_job_params and not bedrock_access.is_available
+                else None
+            )
+            if default is not None and self._is_other_project_profile(
+                default, bedrock_access
+            ):
+                self.add_validation_entry(
+                    param=constants.JOB_PARAM_INSTANCE_PROFILE,
+                    message=f'The default instance profile of queue '
+                    f'{self.context.queue.name} belongs to a project, so jobs of other '
+                    f'projects cannot use it. Ask an administrator to fix the queue '
+                    f'profile.',
+                )
+                return False
             return True
 
         if (
@@ -2338,12 +2489,7 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
             )
             return False
 
-        if instance_profile.startswith('arn:'):
-            instance_profile = instance_profile.split(':instance-profile/')[1]
-
-        result = self.soca_context.aws_util().get_instance_profile_arn(
-            instance_profile_name=instance_profile
-        )
+        result = self._lookup(instance_profile)
         if not result['success']:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_PROFILE,
@@ -2351,10 +2497,53 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
             )
             return False
 
+        # a project instance profile carries that project's model access, so it is only
+        # the one resolved for this job's own project.
+        if self._is_other_project_profile(result['arn'], bedrock_access):
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_INSTANCE_PROFILE,
+                message=f'IAM instance profile: ({instance_profile}) belongs to a project, and '
+                f'a job runs under its own project instance profile only. '
+                f'Submit the job without {constants.JOB_PARAM_INSTANCE_PROFILE}.',
+            )
+            return False
+
         return True
 
     def get(self, raise_exc=False) -> Optional[str]:
         return Utils.get_value_as_string('instance_profile', self.params)
+
+    def _lookup(self, instance_profile: str) -> Dict:
+        """
+        the profile by name. an ARN can carry an IAM path (project profiles do), and IAM
+        looks a profile up by its bare name, so the last part is asked for and the ARN IAM
+        returns must be the one given (SCH-06).
+        """
+        if not instance_profile.startswith('arn:'):
+            return self.soca_context.aws_util().get_instance_profile_arn(
+                instance_profile_name=instance_profile
+            )
+        name = instance_profile.split(':instance-profile/', 1)[-1].rsplit('/', 1)[-1]
+        result = self.soca_context.aws_util().get_instance_profile_arn(
+            instance_profile_name=name
+        )
+        if result.get('success') and result.get('arn') != instance_profile:
+            return {'success': False}
+        return result
+
+    def _is_other_project_profile(
+        self, instance_profile: str, bedrock_access: BedrockJobAccess
+    ) -> bool:
+        arn = instance_profile
+        if not arn.startswith('arn:'):
+            result = self._lookup(arn)
+            if not result.get('success'):
+                return False
+            arn = result['arn']
+        marker = f':instance-profile{ArnBuilder(self.soca_context.config()).project_role_path}'
+        return marker in arn and not (
+            bedrock_access.is_available and arn == bedrock_access.instance_profile_arn
+        )
 
     def get_arn(self, instance_profile: str):
         result = self.soca_context.aws_util().get_instance_profile_arn(
@@ -2373,6 +2562,19 @@ class InstanceProfileParamBuilder(BaseParamBuilder):
         instance_profile = self.get()
         if instance_profile is None:
             instance_profile = self.default()
+            # validate() refuses a queue default that names another project's profile at
+            # submission; a job queued before that check is rebuilt here from the stored
+            # default, so it takes the compute node profile instead (verify-scheduler #2)
+            if (
+                self.default_job_params is not None
+                and instance_profile == self.default_job_params.instance_profile
+                and self._is_other_project_profile(
+                    instance_profile, self.bedrock_access
+                )
+            ):
+                instance_profile = self.soca_context.config().get_string(
+                    'scheduler.compute_node_instance_profile_arn'
+                )
 
         if instance_profile.startswith('arn:'):
             instance_profile_arn = instance_profile
@@ -2612,6 +2814,19 @@ class FsxLustreParamBuilder(BaseParamBuilder):
 
         fsx_lustre = self.get()
 
+        if self.uses_default_existing_fsx(fsx_lustre):
+            # the queue default is mounted as root too; profiles saved before the
+            # DNS-name check may hold any string
+            default_fsx = self.default_existing_fsx()
+            if not EXISTING_FSX_PATTERN.fullmatch(default_fsx):
+                self.add_validation_entry(
+                    param=constants.JOB_PARAM_FSX_LUSTRE,
+                    message=f'The default existing FSx for Lustre of queue '
+                    f'{self.context.queue.name} is not a file system DNS name '
+                    f'({default_fsx}). Ask an administrator to fix the queue profile.',
+                )
+                return False
+
         if fsx_lustre is None:
             return True
 
@@ -2619,6 +2834,22 @@ class FsxLustreParamBuilder(BaseParamBuilder):
             return True
 
         if self.is_restricted_parameter(param_name=constants.JOB_PARAM_FSX_LUSTRE):
+            return False
+        creates_new_fsx = fsx_lustre.existing_fsx is None and not (
+            self.uses_default_existing_fsx(fsx_lustre)
+        )
+        if (
+            creates_new_fsx
+            and self.queue_management is not None
+            and not self.queue_management.allows_new_fsx_lustre()
+        ):
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_FSX_LUSTRE,
+                message=f"Queue {self.context.queue.name} doesn't let jobs create a new "
+                f'FSx for Lustre file system. Ask an administrator to allow it on the '
+                f'queue, or set {constants.JOB_PARAM_FSX_LUSTRE} to the DNS name of an '
+                f'existing file system.',
+            )
             return False
         if fsx_lustre.size is not None:
             if self.is_restricted_parameter(
@@ -2635,6 +2866,19 @@ class FsxLustreParamBuilder(BaseParamBuilder):
                 param_name=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT
             ):
                 return False
+
+        # the compute node bootstrap mounts this name as root, so only the documented
+        # form is accepted: the file system's DNS name.
+        if fsx_lustre.existing_fsx is not None and not EXISTING_FSX_PATTERN.fullmatch(
+            fsx_lustre.existing_fsx
+        ):
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_FSX_LUSTRE,
+                message=f'{constants.JOB_PARAM_FSX_LUSTRE} must be the DNS name of an existing '
+                f'FSx for Lustre file system, for example '
+                f'fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com: ({fsx_lustre.existing_fsx})',
+            )
+            return False
 
         # get_as_int will eat the value provided by user if it's not a valid integer
         # check if user provided a size value and handle appropriately
@@ -2673,10 +2917,29 @@ class FsxLustreParamBuilder(BaseParamBuilder):
             )
             success = False
 
+        # the deployment type the file system gets: the job's, else the queue's
+        effective_deployment_type = (
+            fsx_lustre.deployment_type or self.default().deployment_type
+        )
+        # PERSISTENT_2 links S3 only through a data repository association, which IDEA
+        # doesn't create; ImportPath/ExportPath are for SCRATCH_1/2 and PERSISTENT_1
+        # the bucket the file system gets: the job's, else the queue's (A-S5)
         if (
-            fsx_lustre.deployment_type
-            == constants.FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_1
+            effective_deployment_type
+            == constants.FSX_LUSTRE_DEPLOYMENT_TYPE_PERSISTENT_2
+            and (fsx_lustre.s3_backend or self.default().s3_backend)
+            and fsx_lustre.existing_fsx is None
+            and not self.uses_default_existing_fsx(fsx_lustre)
         ):
+            self.add_validation_entry(
+                param=constants.JOB_PARAM_FSX_LUSTRE_DEPLOYMENT_TYPE,
+                message="An FSx for Lustre file system of type PERSISTENT_2 can't be "
+                'linked to an S3 bucket when it is created. Use PERSISTENT_1, '
+                'SCRATCH_1 or SCRATCH_2 with a bucket, or PERSISTENT_2 without one.',
+            )
+            success = False
+
+        if effective_deployment_type in constants.FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES:
             # get_as_int will eat the value provided by user if it's not a valid integer
             # check if user provided a throughput value and handle appropriately
             per_unit_throughput_str = Utils.get_value_as_string(
@@ -2696,14 +2959,14 @@ class FsxLustreParamBuilder(BaseParamBuilder):
             if (
                 fsx_lustre.per_unit_throughput is not None
                 and not SocaFSxLustreConfig.is_allowed_per_unit_throughput(
-                    fsx_lustre.per_unit_throughput
+                    fsx_lustre.per_unit_throughput, effective_deployment_type
                 )
             ):
                 self.add_validation_entry(
                     param=constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT,
                     message=f'Invalid {constants.JOB_PARAM_FSX_LUSTRE_PER_UNIT_THROUGHPUT}: ({fsx_lustre.per_unit_throughput}). '
                     f'Allowed values: '
-                    f'[{", ".join([str(x) for x in SocaFSxLustreConfig.allowed_per_unit_throughputs()])}]',
+                    f'[{", ".join([str(x) for x in SocaFSxLustreConfig.allowed_per_unit_throughputs(effective_deployment_type)])}]',
                 )
                 success = False
 
@@ -2814,6 +3077,12 @@ class FsxLustreParamBuilder(BaseParamBuilder):
     def apply(self):
         fsx_config = self.get()
 
+        if self.uses_default_existing_fsx(fsx_config):
+            # the job named no file system: the queue's default existing FSx applies
+            fsx_config = SocaFSxLustreConfig(
+                enabled=True, existing_fsx=self.default_existing_fsx()
+            )
+
         if fsx_config is None:
             # disable fsx config
             self.result.fsx_lustre = SocaFSxLustreConfig(enabled=False)
@@ -2847,22 +3116,76 @@ class FsxLustreParamBuilder(BaseParamBuilder):
                 fsx_config.deployment_type = defaults.deployment_type
             if fsx_config.per_unit_throughput is None:
                 fsx_config.per_unit_throughput = defaults.per_unit_throughput
+            # a persistent file system needs a throughput its type takes; a queue value
+            # for another type (the job changed the type) falls back to the type default
+            if (
+                fsx_config.deployment_type
+                in constants.FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES
+                and not SocaFSxLustreConfig.is_allowed_per_unit_throughput(
+                    fsx_config.per_unit_throughput, fsx_config.deployment_type
+                )
+            ):
+                fsx_config.per_unit_throughput = (
+                    SocaFSxLustreConfig.default_per_unit_throughput(
+                        fsx_config.deployment_type
+                    )
+                )
             if fsx_config.size is None:
                 fsx_config.size = defaults.size
 
         self.result.fsx_lustre = fsx_config
 
+    def default_existing_fsx(self) -> Optional[str]:
+        """
+        the queue's default existing FSx, applied at submission only. it applies when the
+        queue profile's scratch provider is "existing FSx", or is unset (profiles written
+        through the API, which may carry only fsx_lustre); a profile switched to EBS or a
+        new FSx keeps no default even if an old value is still stored.
+        """
+        if not getattr(self.context, 'at_submission', True):
+            return None
+        default_job_params = self.default_job_params
+        default_fsx = default_job_params.fsx_lustre if default_job_params else None
+        if (
+            default_fsx is None
+            or default_fsx.enabled is False
+            or Utils.is_empty(default_fsx.existing_fsx)
+            or default_job_params.scratch_provider not in (None, 'fsx-lustre-existing')
+        ):
+            return None
+        return default_fsx.existing_fsx
+
+    def uses_default_existing_fsx(
+        self, fsx_config: Optional[SocaFSxLustreConfig]
+    ) -> bool:
+        """
+        the job named no file system: nothing, or fsx_lustre=true alone. a bucket is a
+        request for a new file system and gets the new-FSx defaults instead.
+        """
+        if self.default_existing_fsx() is None:
+            return False
+        return fsx_config is None or (
+            fsx_config.enabled is True
+            and fsx_config.existing_fsx is None
+            and fsx_config.s3_backend is None
+        )
+
     def default(self, s3_backend: Optional[str] = None) -> SocaFSxLustreConfig:
-        if self.default_job_params and self.default_job_params.fsx_lustre is not None:
+        if (
+            self.default_job_params
+            and self.default_job_params.fsx_lustre is not None
+            and self.default_job_params.fsx_lustre.enabled is not False
+        ):
+            # a queue whose FSx default is turned off (scratch off in the portal) keeps
+            # its stored settings, but a job asking for a file system there does not
+            # silently take them (rereview3 S3)
             default_fsx_config = self.default_job_params.fsx_lustre
         else:
             # create dummy defaults to make it easier to write code, else there will be lot of None checks
             default_fsx_config = SocaFSxLustreConfig()
 
-        # admin may configure existing fsx at queue level
-        # if so, no other parameters are applicable for defaults
-        if default_fsx_config.existing_fsx is not None:
-            return SocaFSxLustreConfig(existing_fsx=default_fsx_config.existing_fsx)
+        # these are the defaults of a NEW file system; a queue's existing FSx is applied
+        # by apply() through default_existing_fsx() and never fills a new one
 
         deployment_type = default_fsx_config.deployment_type
         if deployment_type is None:
@@ -2870,7 +3193,15 @@ class FsxLustreParamBuilder(BaseParamBuilder):
 
         per_unit_throughput = None
         if deployment_type in constants.FSX_LUSTRE_PER_UNIT_THROUGHPUT_TYPES:
-            per_unit_throughput = constants.DEFAULT_FSX_LUSTRE_PER_UNIT_THROUGHPUT
+            per_unit_throughput = default_fsx_config.per_unit_throughput
+            if per_unit_throughput is None or not (
+                SocaFSxLustreConfig.is_allowed_per_unit_throughput(
+                    per_unit_throughput, deployment_type
+                )
+            ):
+                per_unit_throughput = SocaFSxLustreConfig.default_per_unit_throughput(
+                    deployment_type
+                )
 
         size = default_fsx_config.size
         if size is None:
@@ -2881,8 +3212,15 @@ class FsxLustreParamBuilder(BaseParamBuilder):
         if s3_backend is None:
             s3_backend = default_fsx_config.s3_backend
 
+        # the queue's import and export prefixes go with the queue's own bucket: without
+        # them the file system was linked to the whole bucket (SJP-20)
+        same_bucket = (
+            s3_backend is not None and s3_backend == default_fsx_config.s3_backend
+        )
         return SocaFSxLustreConfig(
             s3_backend=s3_backend,
+            import_path=default_fsx_config.import_path if same_bucket else None,
+            export_path=default_fsx_config.export_path if same_bucket else None,
             deployment_type=deployment_type,
             per_unit_throughput=per_unit_throughput,
             size=size,
@@ -2894,9 +3232,9 @@ class EnableScratchParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
-        enable_scratch = self.get()
-
-        if enable_scratch is None:
+        # only a value the job sets is restricted; get() derives one for every job
+        # (from scratch size, FSx or the default), which refused every job (SCH-16)
+        if Utils.get_value_as_bool('enable_scratch', self.params) is None:
             return True
 
         if self.is_restricted_parameter():
@@ -2923,6 +3261,8 @@ class EnableScratchParamBuilder(BaseParamBuilder):
             return True
         if fsx_lustre is not None and Utils.is_true(fsx_lustre.enabled):
             return True
+        if fsx_lustre is None and fsx_lustre_builder.uses_default_existing_fsx(None):
+            return True
 
         return self.default()
 
@@ -2948,12 +3288,13 @@ class EnableEfaParamBuilder(BaseParamBuilder):
     def validate(self) -> bool:
         enable_efa_support = self.get()
 
+        # only a value the job sets is restricted: every job was refused (SJP-18)
+        if enable_efa_support is not None and self.is_restricted_parameter():
+            return False
+
         if enable_efa_support is None:
             # Check if EFA is enabled by default in the queue profile
             enable_efa_support = self.default()
-
-        if self.is_restricted_parameter():
-            return False
 
         if enable_efa_support is False:
             # if it's false, we have no further validations to be performed. return True
@@ -3398,9 +3739,41 @@ class TerminateWhenIdleOptionBuilder(BaseParamBuilder):
         if terminate_when_idle is None:
             return True
 
+        if self.is_restricted_parameter():
+            return False
+
         if not self.eval_positive_int(
             constants.JOB_OPTION_TERMINATE_WHEN_IDLE, terminate_when_idle
         ):
+            return False
+
+        # idle capacity outlives its job, so only a queue set up to keep idle nodes allows it
+        if (
+            self.context.has_queue()
+            and terminate_when_idle > 0
+            and Utils.get_as_int(self.context.queue.terminate_when_idle, 0) <= 0
+        ):
+            self.add_validation_entry(
+                param=constants.JOB_OPTION_TERMINATE_WHEN_IDLE,
+                message=f"Queue {self.context.queue.name} doesn't keep idle compute nodes, "
+                f"so jobs can't set {constants.JOB_OPTION_TERMINATE_WHEN_IDLE}. "
+                f'Remove it from your job script.',
+            )
+            return False
+
+        # the queue's idle time is the longest a job's nodes stay up idle; a job may ask less
+        queue_idle = (
+            Utils.get_as_int(self.context.queue.terminate_when_idle, 0)
+            if self.context.has_queue()
+            else 0
+        )
+        if queue_idle > 0 and terminate_when_idle > queue_idle:
+            self.add_validation_entry(
+                param=constants.JOB_OPTION_TERMINATE_WHEN_IDLE,
+                message=f'Queue {self.context.queue.name} keeps idle compute nodes for at '
+                f'most {queue_idle} minutes, so {constants.JOB_OPTION_TERMINATE_WHEN_IDLE} '
+                f'can be at most {queue_idle}.',
+            )
             return False
 
         return True
@@ -3430,6 +3803,25 @@ class KeepForeverOptionBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
+        keep_forever = self.get()
+        if keep_forever is None:
+            return True
+
+        if self.is_restricted_parameter():
+            return False
+
+        # always-on capacity is the queue's choice, not the job's
+        if self.context.has_queue() and keep_forever != Utils.get_as_bool(
+            self.context.queue.keep_forever, constants.DEFAULT_KEEP_FOREVER
+        ):
+            self.add_validation_entry(
+                param=constants.JOB_OPTION_KEEP_FOREVER,
+                message=f'Queue {self.context.queue.name} decides whether its compute nodes '
+                f"stay up, so jobs can't set {constants.JOB_OPTION_KEEP_FOREVER}. "
+                f'Remove it from your job script.',
+            )
+            return False
+
         return True
 
     def get(self) -> Optional[bool]:
@@ -3455,13 +3847,41 @@ class TagsOptionBuilder(BaseParamBuilder):
 
     def validate(self) -> bool:
         try:
-            self.get(raise_exc=True)
-            return True
+            tags = self.get(raise_exc=True)
         except exceptions.SocaException as e:
             self.add_validation_entry(
                 param=constants.JOB_OPTION_TAGS, message=e.message
             )
             return False
+
+        if tags is None:
+            return True
+
+        if self.is_restricted_parameter():
+            return False
+
+        if not isinstance(tags, dict):
+            self.add_validation_entry(
+                param=constants.JOB_OPTION_TAGS,
+                message=f'{constants.JOB_OPTION_TAGS} should be a valid dictionary.',
+            )
+            return False
+
+        reserved = sorted(
+            str(key)
+            for key in tags
+            if str(key) == 'Name'
+            or str(key).lower().startswith(RESERVED_TAG_KEY_PREFIXES)
+        )
+        if len(reserved) > 0:
+            self.add_validation_entry(
+                param=constants.JOB_OPTION_TAGS,
+                message=f'{constants.JOB_OPTION_TAGS} cannot set Name or keys starting with '
+                f'idea: or aws:, which IDEA and AWS use: ({", ".join(reserved)})',
+            )
+            return False
+
+        return True
 
     def get(self, raise_exc=False) -> Optional[Dict]:
         tags = Utils.get_value_as_string('tags', self.params)
@@ -3495,18 +3915,21 @@ class ComputeStackParamBuilder(BaseParamBuilder):
         if compute_stack.strip().lower() == 'tbd':
             return True
 
-        def sanitize(token) -> str:
-            return token.strip().lower().replace('-', '').replace('_', '')
-
-        cluster_name = self.soca_context.cluster_name()
-        compute_stack_prefix = sanitize(cluster_name)
-
-        pattern = compute_stack_prefix + '-([a-z0-9-]){5, 50}'
-        match = re.match(pattern, compute_stack)
-        if not match:
+        # the provisioner names a stack <cluster name>-... with the name as it is
+        # (SocaJob.get_compute_stack); the hyphen-less form is kept for any older stack
+        cluster_name = self.soca_context.cluster_name().strip().lower()
+        prefixes = sorted(
+            {cluster_name, cluster_name.replace('-', '').replace('_', '')}
+        )
+        pattern = (
+            '('
+            + '|'.join(re.escape(prefix) for prefix in prefixes)
+            + ')-[a-z0-9-]{5,50}'
+        )
+        if not re.fullmatch(pattern, compute_stack):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_COMPUTE_STACK,
-                message=f'stack_id must match the pattern: /{pattern}/g',
+                message=f'{constants.JOB_PARAM_COMPUTE_STACK} must match the pattern: /{pattern}/',
             )
             return False
 
@@ -3582,12 +4005,11 @@ class JobGroupParamBuilder(BaseParamBuilder):
 
         # remember: validate is only called when user submits the job.
         # so this pattern check for job group is only applicable if user submits a job with a custom job group
-        pattern = 'custom-([a-z0-9]){1, 10}'
-        match = re.match(pattern, job_group)
-        if not match:
+        if not JOB_GROUP_PATTERN.fullmatch(job_group):
             self.add_validation_entry(
-                param=constants.JOB_PARAM_COMPUTE_STACK,
-                message=f'stack_id must match the pattern: /{pattern}/g',
+                param=constants.JOB_PARAM_JOB_GROUP,
+                message=f'{constants.JOB_PARAM_JOB_GROUP} must be custom- followed by 1 to 10 '
+                f'lowercase letters or digits: ({job_group})',
             )
             return False
 
@@ -3733,11 +4155,13 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         project: Optional[str] = None,
         job_id: Optional[str] = None,
         queue_name: Optional[str] = None,
+        at_submission: bool = True,
     ):
         self._params = params
         self._project = project
         self._job_id = job_id
         self._queue_name = queue_name
+        self.at_submission = at_submission
 
         if Utils.is_empty(stack_uuid) and queue_profile is not None:
             stack_uuid = queue_profile.stack_uuid
@@ -4004,7 +4428,10 @@ class SocaJobBuilder:
         project: Optional[str] = None,
         job_id: Optional[str] = None,
         queue_name: Optional[str] = None,
+        at_submission: bool = True,
     ):
+        # at_submission False: params read back from the scheduler, which already carry
+        # what submission resolved, so submission-only defaults are not applied again
         self._context = JobParamsBuilderContext(
             context=context,
             params=params,
@@ -4013,6 +4440,7 @@ class SocaJobBuilder:
             project=project,
             job_id=job_id,
             queue_name=queue_name,
+            at_submission=at_submission,
         )
 
     def validate(self) -> JobValidationResult:

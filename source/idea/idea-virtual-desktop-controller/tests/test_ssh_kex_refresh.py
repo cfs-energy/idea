@@ -10,6 +10,7 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils imp
     BOOTSTRAP_REFRESH_LINUX_BASE_OS,
 )
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_utils import (
+    BOOTSTRAP_REFRESH_PRELUDE,
     BOOTSTRAP_REFRESH_VERSION,
     BOOTSTRAP_REFRESH_TEMPLATES,
     bootstrap_refresh_variables,
@@ -69,13 +70,14 @@ def test_command_renders_shared_template_and_records_completion_metadata(
     command_id = refresh.command_utils.submit_ssm_command_to_refresh_bootstrap(session)
     request = refresh.ssm.requests[0]
     payload = request['Parameters']['commands'][0]
-    variables = bootstrap_refresh_variables(refresh.context.config())
+    variables = {
+        **bootstrap_refresh_variables(refresh.context.config()),
+        'ssh_allowed_users': [session.owner],
+    }
     assert payload == render_bootstrap_refresh(
         refresh.context.get_bootstrap_dir(), base_os, variables
     )
-    assert payload.startswith(
-        'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n# Begin: Post-Quantum'
-    )
+    assert payload.startswith(BOOTSTRAP_REFRESH_PRELUDE + '# Begin: Post-Quantum')
     for template in BOOTSTRAP_REFRESH_TEMPLATES:
         assert Path(refresh.context.get_bootstrap_dir(), template).is_file()
     assert '# Begin: Terminal Trust' in payload
@@ -203,6 +205,17 @@ def test_background_sweep_waits_for_leadership_and_survives_failure(refresh_loop
     app._refresh_bootstrap_loop()
     assert app._bootstrap_session_utils.refresh_bootstrap.call_count == 2
     assert app.context.logger().warning.call_count == 2
+
+
+def test_session_counts_publish_every_five_minutes_on_the_leader(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    calls = []
+    app._session_counts.publish.side_effect = lambda: calls.append(clock.now)
+    app._refresh_bootstrap_loop()
+    # the loop wakes at 0, 60, 21599, 21600, 21660, 43200: not before leadership, and
+    # not again within five minutes of the last publish
+    assert calls == [60, 21599, 43200]
 
 
 def test_runs_are_reconciled_once_and_only_on_the_leader(refresh_loop):
@@ -506,3 +519,25 @@ def test_a_missing_private_zone_degrades_the_refresh(refresh):
     assert '/etc/ssh/sshd_config.d/10-idea-kex.conf' in payload
     assert 's/^PBS_SERVER=.*/PBS_SERVER=scheduler.private_dns_name/' in payload
     assert 'idea-scheduler.conf' not in payload
+
+
+def test_stack_expiry_runs_on_the_leader_and_a_failure_costs_only_itself(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    app._stack_expiry.tick.side_effect = RuntimeError('no table')
+    app._refresh_bootstrap_loop()
+    # the loop wakes at 0, 60, 21599, 21600, 21660, 43200; not before leadership
+    assert app._stack_expiry.tick.call_count == 5
+    assert app._session_counts.publish.call_count == 3
+
+
+def test_the_index_sweep_runs_at_start_and_every_six_hours_on_the_leader(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    calls = []
+    sweep = app._bootstrap_session_utils.drop_index_entries_without_a_row
+    sweep.side_effect = lambda: calls.append(clock.now)
+    # a bootstrap refresh that fails must not stop the listing being cleaned
+    app._bootstrap_session_utils.refresh_bootstrap.side_effect = RuntimeError('x')
+    app._refresh_bootstrap_loop()
+    assert calls == [60, 21660]

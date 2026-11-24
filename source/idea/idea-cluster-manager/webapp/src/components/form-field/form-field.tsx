@@ -17,7 +17,8 @@ import {
     GetParamDefaultRequest, GetParamDefaultResult, GetParamsRequest, GetParamsResult, SetParamRequest, SetParamResult,
     SocaUserInputGroupMetadata,
     SocaUserInputParamMetadata,
-    SocaUserInputSectionMetadata
+    SocaUserInputSectionMetadata,
+    SocaUserInputValidate
 } from "../../client/data-model";
 
 import Utils from '../../common/utils'
@@ -38,6 +39,11 @@ import {faAdd, faRemove} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import ReactMarkdown from "react-markdown";
 
+/** A param's validation, with the words to show when its regex does not match. */
+export interface IdeaFormValidate extends SocaUserInputValidate {
+    message?: string
+}
+
 export interface IdeaFormFieldSyncAPI {
     getParamDefault(req: GetParamDefaultRequest): Promise<GetParamDefaultResult>
 
@@ -54,6 +60,12 @@ export interface IdeaFormFieldCustomActionProvider {
     getCustomActionLabel(customTypeName: string): string | null
 }
 
+
+// stored application forms written before 26.11.2 carry this job name pattern, whose repeated group takes
+// exponential time on a name that fails near its end; the flat class accepts the same names and enforces the 50 limit
+export const LEGACY_PATTERNS: Record<string, string> = {
+    '^([A-Za-z0-9_-]+){3,50}$': '^[A-Za-z0-9_-]{3,50}$',
+}
 
 export interface IdeaFormFieldProps {
     module: string
@@ -100,13 +112,13 @@ export interface IdeaFormFieldState {
 
     booleanVal(): boolean
 
-    numberVal(): number
+    numberVal(decimal?: boolean): number
 
     stringArrayVal(): string[]
 
     booleanArrayVal(): boolean[]
 
-    numberArrayVal(): number[]
+    numberArrayVal(decimal?: boolean): number[]
 
     amountVal(): string
 
@@ -196,6 +208,9 @@ export class IdeaFormFieldRegistry {
 
 class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
 
+    // a slower answer to earlier typing must not replace the current suggestions
+    private autoCompleteLookup = 0
+
     constructor(props: IdeaFormFieldProps) {
         super(props)
         this.state = {
@@ -255,9 +270,9 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                 }
                 return 0
             },
-            numberArrayVal(): number[] {
+            numberArrayVal(decimal: boolean = false): number[] {
                 if (this.value != null) {
-                    return Utils.asNumberArray(this.value)
+                    return Utils.asNumberArray(this.value, decimal)
                 }
                 return []
             },
@@ -333,7 +348,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
             switch (dataType) {
                 case 'int':
                 case 'float':
-                    return this.state.numberArrayVal()
+                    return this.state.numberArrayVal(dataType === 'float')
                 case 'bool':
                     return this.state.booleanArrayVal()
                 default:
@@ -344,7 +359,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
             switch (dataType) {
                 case 'int':
                 case 'float':
-                    return this.state.numberVal()
+                    return this.state.numberVal(dataType === 'float')
                 case 'bool':
                     return this.state.booleanVal()
                 case 'amount':
@@ -441,7 +456,11 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
     setValue(value: any) {
         this.setState({
             value: value
-        }, this.setStateCallback)
+        }, () => {
+            // a select shows its selected option, not its value
+            this.updateSelectedOptions()
+            this.setStateCallback()
+        })
     }
 
     setNull(): Promise<any> {
@@ -685,6 +704,11 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
     }
 
     validate(): string {
+        // the form holds the last pair that matched, so a pair that no longer matches must stop the submit
+        if (this.props.param.param_type === 'new-password' && this.state.stringVal() !== this.state.stringVal2()
+            && !(Utils.isEmpty(this.state.stringVal()) && Utils.isEmpty(this.state.stringVal2()))) {
+            return 'MISMATCH'
+        }
         const validate = this.props.param.validate
         if (validate == null) {
             return 'OK'
@@ -697,7 +721,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
         if (validate.min != null || validate.max != null) {
             const dataType = this.props.param.data_type!
             const decimal = (dataType === 'float')
-            const numberVal = this.state.numberVal()
+            const numberVal = this.state.numberVal(decimal)
             const min = Utils.asNumber(validate.min, 0, decimal)
             const max = Utils.asNumber(validate.max, 0, decimal)
             if (validate.min != null && validate.max != null) {
@@ -768,6 +792,9 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                 case 'REQUIRED':
                     errorMessage = `${displayTitle} is required.`
                     break
+                case 'MISMATCH':
+                    errorMessage = 'Passwords do not match'
+                    break
                 case 'NUMBER_RANGE':
                     errorMessage = `${displayTitle} must be between ${this.props.param.validate?.min}
                     and ${this.props.param.validate?.max}.`
@@ -779,7 +806,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                     errorMessage = `${displayTitle} must be less than or equal to ${this.props.param.validate?.max}`
                     break
                 case 'REGEX':
-                    errorMessage = `${displayTitle} must satisfy regex: ${this.props.param.validate?.regex}`
+                    errorMessage = (this.props.param.validate as IdeaFormValidate | undefined)?.message ?? `${displayTitle} must satisfy regex: ${this.props.param.validate?.regex}`
                     break
                 /*case 'CUSTOM_FAILED':
                     errorMessage = this.props.param.validate?.custom?.error_message
@@ -943,7 +970,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
         if (regex == null || Utils.isEmpty(regex)) {
             return true
         }
-        const re = RegExp(regex)
+        const re = RegExp(LEGACY_PATTERNS[regex] ?? regex)
         let token = value
         if (token == null) {
             token = this.state.stringVal()
@@ -1281,8 +1308,10 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                          }}
                          onLoadItems={(event) => {
                              if (this.props.onFetchOptions) {
+                                 const lookup = ++this.autoCompleteLookup
                                  this.setState({
                                      options: [],
+                                     errorMessage: null,
                                      dynamicOptionsLoading: true
                                  }, () => {
                                      this.props.onFetchOptions!({
@@ -1294,11 +1323,20 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                                              }
                                          ]
                                      }).then(result => {
-                                         this.setOptions(result)
+                                         if (lookup === this.autoCompleteLookup) {
+                                             this.setOptions(result)
+                                         }
+                                     }).catch(error => {
+                                         console.error(error)
+                                         if (lookup === this.autoCompleteLookup) {
+                                             this.setState({errorMessage: 'Choices could not be loaded. Try again.'})
+                                         }
                                      }).finally(() => {
-                                         this.setState({
-                                             dynamicOptionsLoading: false
-                                         })
+                                         if (lookup === this.autoCompleteLookup) {
+                                             this.setState({
+                                                 dynamicOptionsLoading: false
+                                             })
+                                         }
                                      })
                                  })
                              }

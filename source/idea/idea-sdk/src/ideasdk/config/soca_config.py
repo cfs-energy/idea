@@ -14,6 +14,25 @@ from ideadatamodel.model_utils import ModelUtils as Utils
 
 from pyhocon import ConfigTree, tool, ConfigException, ConfigFactory
 from typing import Optional, List, Dict, Any
+import copy
+
+
+def logged_value(key: Any, value: Any) -> Any:
+    """
+    what a log line shows for a setting: the value, except the storage usage snapshot, which
+    lists every user with their bytes and is shown as counts and a total. every place that
+    logs a setting's value goes through here: the write, the stream of changes each module
+    follows, and the settings a module prints when it starts.
+    """
+    if str(key).rsplit('.', 1)[-1] != 'usage_snapshot' or value is None:
+        return value
+    try:
+        snapshots = list(Utils.from_json(value).values())
+        users = sum(len(snapshot['users']) for snapshot in snapshots)
+        total = sum(snapshot['total_bytes'] for snapshot in snapshots)
+        return f'<{len(snapshots)} file systems, {users} users, {total} bytes>'
+    except Exception:
+        return f'<{len(str(value))} characters>'
 
 
 def is_null_value(value: Any) -> bool:
@@ -180,6 +199,18 @@ class SocaConfig:
 
     def as_yaml(self):
         return tool.HOCONConverter().to_yaml(self._config)
+
+    def as_logged_yaml(self):
+        def logged(tree):
+            for key, value in tree.items():
+                if isinstance(value, dict):
+                    logged(value)
+                else:
+                    tree[key] = logged_value(key, value)
+
+        config = copy.deepcopy(self._config)
+        logged(config)
+        return tool.HOCONConverter().to_yaml(config)
 
     def as_json(self):
         return tool.HOCONConverter().to_json(self._config)

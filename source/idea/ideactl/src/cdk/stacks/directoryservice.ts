@@ -411,10 +411,9 @@ export class DirectoryServiceStack extends IdeaBaseStack {
       security_group_id: (this.openldapSecurityGroup as OpenLDAPServerSecurityGroup).securityGroupId,
       iam_role_arn: (this.openldapRole as Role).roleArn,
       instance_profile_arn: (this.openldapInstanceProfile as InstanceProfile).ref,
-      // This path reads raw secret resources. With supplied root credentials those resources are
-      // absent, so the dereference fails.
-      root_username_secret_arn: (credentials.adminUsername as secretsmanager.CfnSecret).ref,
-      root_password_secret_arn: (credentials.adminPassword as secretsmanager.CfnSecret).ref,
+      // the created secrets, or the operator's when root credentials are supplied
+      root_username_secret_arn: credentials.getUsernameSecretArn(),
+      root_password_secret_arn: credentials.getPasswordSecretArn(),
       tls_certificate_secret_arn: this.tlsCertificateSecretArn(),
       tls_private_key_secret_arn: this.tlsPrivateKeySecretArn(),
     };

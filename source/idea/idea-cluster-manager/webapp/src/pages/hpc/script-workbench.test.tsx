@@ -190,6 +190,53 @@ describe('script workbench', () => {
         );
     });
 
+    it('names the saved script by the file the scheduler kept', async () => {
+        await submitRejectedJob({...accepted(), job: {job_id: '101', job_uid: 'uid1', name: 'r&d run'}, job_script_path: '/shared/home/alice/jobs/r_d_run_uid1.que'});
+        expect(await screen.findByText('~/jobs/r_d_run_uid1.que')).toBeInTheDocument();
+    });
+
+    it('does not claim a saved script when the scheduler kept none', async () => {
+        await submitRejectedJob(accepted());
+        expect(await screen.findByText('Job 101 submitted')).toBeInTheDocument();
+        expect(screen.queryByText(/The script is saved as/)).toBeNull();
+    });
+
+    async function checkWithEstimate(estimate: Partial<SubmitJobResult>) {
+        const context = initTestAppContext();
+        vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue({...DRY_RUN_ACCEPTED, ...estimate});
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+        await user.click(await screen.findByRole('button', {name: /Insert sample script/i}));
+        await user.click(await screen.findByRole('button', {name: /Check script/i}));
+        await screen.findByText('Script passed the check');
+    }
+
+    it('shows an unknown price as not available, never as $0', async () => {
+        await checkWithEstimate({estimated_bom_cost: {
+            price_unavailable: true,
+            line_items: [{title: 'c5.large', quantity: 1, unit: 'per hour', unit_price: {amount: 0, unit: 'USD'}, total_price: {amount: 0, unit: 'USD'}}],
+            line_items_total: {amount: 0, unit: 'USD'}
+        }});
+        expect(screen.getByText('Price not available')).toBeInTheDocument();
+        expect(screen.queryByText(/\$0/)).toBeNull();
+    });
+
+    it('says a budget is missing instead of showing placeholder spend', async () => {
+        // the scheduler's answer for a project whose budget is gone: placeholder figures plus an incidental
+        const context = initTestAppContext();
+        vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue({...DRY_RUN_ACCEPTED,
+            estimated_bom_cost: {line_items: [], line_items_total: {amount: 5, unit: 'USD'}},
+            budget_usage: {budget_name: 'marker-budget', budget_limit: {amount: 100, unit: 'USD'}, actual_spend: {amount: 200, unit: 'USD'}},
+            incidentals: {results: [{error_code: 'Budgets.LimitExceeded', message: 'Budget not found: marker-budget'}]}
+        });
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+        await user.click(await screen.findByRole('button', {name: /Insert sample script/i}));
+        await user.click(await screen.findByRole('button', {name: /Check script/i}));
+        expect(await screen.findByText('Budget not found: marker-budget')).toBeInTheDocument();
+        expect(screen.queryByText(/spent of/)).toBeNull();
+    });
+
     it('lists the directives without marking optional ones as errors', async () => {
         initTestAppContext();
         renderScriptWorkbench();
@@ -228,6 +275,22 @@ describe('script workbench', () => {
         expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
         expect(submitJob.mock.calls[0][0].project).toBeUndefined();
         expect(atob(submitJob.mock.calls[0][0].job_script!)).toBe(script);
+    });
+
+    // the scheduler decodes job_script as UTF-8: a curly apostrophe made btoa throw and é went as one byte
+    it('sends a script with non-ASCII text as UTF-8', async () => {
+        const context = initTestAppContext();
+        const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue(DRY_RUN_ACCEPTED);
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        const script = '#!/bin/bash\n#PBS -P default\n# Bob\u2019s run, café → done\necho hi\n';
+        await setScript(user, script);
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
+        const bytes = Uint8Array.from(atob(submitJob.mock.calls[0][0].job_script!), (char) => char.charCodeAt(0));
+        expect(new TextDecoder('utf-8', {fatal: true}).decode(bytes)).toBe(script);
     });
 
     it('does not read a priority line as the project', async () => {

@@ -10,6 +10,8 @@
 #  and limitations under the License.
 from typing import List, Dict, Optional
 
+from botocore.exceptions import ClientError
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSchedule, DayOfWeek, VirtualDesktopScheduleType
 from ideasdk.utils import DateTimeUtils, Utils
@@ -251,15 +253,23 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
                 },
             }
         }
-        query_result = self._table.query(**query_request)
-        schedule_entries = Utils.get_value_as_list('Items', query_result, [])
+        schedule_entries = []
+        while True:
+            query_result = self._table.query(**query_request)
+            schedule_entries.extend(Utils.get_value_as_list('Items', query_result, []))
+            last_key = query_result.get('LastEvaluatedKey')
+            if not last_key:
+                break
+            query_request['ExclusiveStartKey'] = last_key
         result: List[VirtualDesktopSchedule] = []
         for schedule in schedule_entries:
             result.append(self.convert_db_dict_to_schedule_object(schedule))
 
         return result
 
-    def delete(self, schedule: VirtualDesktopSchedule):
+    def delete(
+        self, schedule: VirtualDesktopSchedule, idea_session_id: Optional[str] = None
+    ):
         if Utils.is_empty(schedule):
             self._logger.info('Empty schedule object. Returning.')
             return
@@ -271,13 +281,35 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
             else str(schedule.day_of_week)
         )
 
-        result = self._table.delete_item(
-            Key={
-                schedules_constants.SCHEDULE_DB_HASH_KEY: day_of_week_str,
-                schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule.schedule_id,
-            },
-            ReturnValues='ALL_OLD',
-        )
+        # a reference stored before 26.11.2 may name another desktop's row: only this
+        # desktop's own row is removed, by the desktop the caller holds, not the id the
+        # reference itself carries
+        owner_id = idea_session_id or schedule.idea_session_id
+        condition = {}
+        if Utils.is_not_empty(owner_id):
+            condition = {
+                'ConditionExpression': '#sid = :sid',
+                'ExpressionAttributeNames': {
+                    '#sid': schedules_constants.SCHEDULE_DB_IDEA_SESSION_ID_KEY
+                },
+                'ExpressionAttributeValues': {':sid': owner_id},
+            }
+        try:
+            result = self._table.delete_item(
+                Key={
+                    schedules_constants.SCHEDULE_DB_HASH_KEY: day_of_week_str,
+                    schedules_constants.SCHEDULE_DB_RANGE_KEY: schedule.schedule_id,
+                },
+                ReturnValues='ALL_OLD',
+                **condition,
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+            self._logger.warning(
+                f'schedule {schedule.schedule_id} is not a row of {schedule.idea_session_id}; left alone'
+            )
+            return
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
 
         # Add safety check to prevent KeyError when the keys don't exist

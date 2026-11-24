@@ -91,6 +91,8 @@ class ADAutomationDAO:
         response = self.table.query(
             KeyConditionExpression='instance_id = :instance_id',
             ExpressionAttributeValues={':instance_id': instance_id},
+            # a success record just written must be seen by a redelivery
+            ConsistentRead=True,
         )
 
         return response.get('Items', [])

@@ -49,8 +49,49 @@ else
   CLOUDWATCH_AGENT_DOWNLOAD_LINK="$(get_cloudwatch_agent_download_link)"
   CLOUDWATCH_AGENT_PACKAGE_NAME="$(basename ${CLOUDWATCH_AGENT_DOWNLOAD_LINK})"
   pushd ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR} || exit
-  # curl, not wget: desktop hosts run this before system packages, and stock images may lack wget
-  curl -fsSLO "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
+  # An operator who pins versioned packages (download_link, or a download_link_pattern that
+  # resolves per OS and architecture) gives their SHA-256 digests in
+  # global-settings.package_config.amazon_cloudwatch_agent.sha256; those are then checked.
+  # Otherwise the package comes from a "latest" URL, where no checksum can be pinned: its
+  # detached signature (the package URL plus .sig, for download_link or the regional pattern
+  # alike) must be by the CloudWatch agent key carried in this bundle (primary fingerprint
+  # 9376 16F3 450B 7D80 6CBD 9725 D581 6730 3B78 9C72, as the CloudWatch agent guide publishes).
+  # A release published between the two downloads mismatches once, so the pair is fetched again
+  # before the host fails.
+  CLOUDWATCH_AGENT_SHA256='{{ context.config.get_string('global-settings.package_config.amazon_cloudwatch_agent.sha256', default='') | default('', true) | string | replace("'", "'\\''") }}'
+  cat > ./amazon-cloudwatch-agent.gpg <<'AMAZON_CLOUDWATCH_AGENT_GPG_KEY'
+{% include '_templates/linux/AMAZON-CLOUDWATCH-AGENT-GPG-KEY' %}
+AMAZON_CLOUDWATCH_AGENT_GPG_KEY
+  CLOUDWATCH_AGENT_VERIFIED=no
+  for CLOUDWATCH_AGENT_ATTEMPT in 1 2; do
+    rm -f "./${CLOUDWATCH_AGENT_PACKAGE_NAME}" "./${CLOUDWATCH_AGENT_PACKAGE_NAME}.sig"
+    # curl, not wget: desktop hosts run this before system packages, and stock images may lack wget
+    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 600 "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}" -o "./${CLOUDWATCH_AGENT_PACKAGE_NAME}"; then
+      fail_bootstrap download-failed "CloudWatch agent package ${CLOUDWATCH_AGENT_DOWNLOAD_LINK} could not be downloaded"
+    fi
+    if [[ -n "${CLOUDWATCH_AGENT_SHA256}" ]]; then
+      # one digest per package the cluster's hosts resolve (OS family and architecture differ),
+      # separated by spaces or commas: the package must match one of them
+      CLOUDWATCH_AGENT_ACTUAL=$(sha256sum "./${CLOUDWATCH_AGENT_PACKAGE_NAME}" 2> /dev/null | awk '{print $1}')
+      if [[ -z "${CLOUDWATCH_AGENT_ACTUAL}" || " ${CLOUDWATCH_AGENT_SHA256//,/ } " != *" ${CLOUDWATCH_AGENT_ACTUAL} "* ]]; then
+        fail_bootstrap download-unverified "CloudWatch agent package ${CLOUDWATCH_AGENT_DOWNLOAD_LINK} (SHA-256 ${CLOUDWATCH_AGENT_ACTUAL:-unreadable}) matches no digest in global-settings.package_config.amazon_cloudwatch_agent.sha256"
+      fi
+      log_info "${CLOUDWATCH_AGENT_PACKAGE_NAME}: SHA-256 matches global-settings.package_config.amazon_cloudwatch_agent.sha256"
+      CLOUDWATCH_AGENT_VERIFIED=yes
+      break
+    fi
+    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}.sig" -o "./${CLOUDWATCH_AGENT_PACKAGE_NAME}.sig"; then
+      fail_bootstrap download-unverified "no signature at ${CLOUDWATCH_AGENT_DOWNLOAD_LINK}.sig: serve the .sig next to the package, or set global-settings.package_config.amazon_cloudwatch_agent.download_link to a versioned package and global-settings.package_config.amazon_cloudwatch_agent.sha256 to its SHA-256"
+    fi
+    if verify_detached_signature ./amazon-cloudwatch-agent.gpg 937616F3450B7D806CBD9725D58167303B789C72 \
+        "./${CLOUDWATCH_AGENT_PACKAGE_NAME}.sig" "./${CLOUDWATCH_AGENT_PACKAGE_NAME}"; then
+      CLOUDWATCH_AGENT_VERIFIED=yes
+      break
+    fi
+  done
+  if [[ "${CLOUDWATCH_AGENT_VERIFIED}" != yes ]]; then
+    fail_bootstrap download-unverified "CloudWatch agent package ${CLOUDWATCH_AGENT_DOWNLOAD_LINK} failed its signature check"
+  fi
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}
@@ -63,7 +104,10 @@ fi
 
 {% set cloudwatch_agent_config = context.get_cloudwatch_agent_config(additional_log_files=additional_log_files) %}
 {% if cloudwatch_agent_config %}
-echo '{{ context.utils.to_json(cloudwatch_agent_config, indent=True) }}' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+# a quoted here-document: the rendered configuration is data, whatever its labels hold
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'IDEA_CLOUDWATCH_AGENT_CONFIG'
+{{ context.utils.to_json(cloudwatch_agent_config, indent=True) }}
+IDEA_CLOUDWATCH_AGENT_CONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 {% else %}
 log_warning "Install CloudWatch Agent: cloudwatch_agent_config not provided."

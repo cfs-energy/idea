@@ -17,6 +17,7 @@ from ideasdk.aws.compute_rate import (
     COMPUTE_RATE_MULTIPLIER_KEY,
     parse_compute_rate_multiplier,
 )
+from ideasdk.aws.image_builds import BUILDER_INSTANCE_TYPES, check_builder_instance_type
 from ideasdk.utils.group_name_helper import (
     DEFAULT_OPERATIONS_LEADS_GROUP_NAME,
     GroupNameHelper,
@@ -1108,8 +1109,49 @@ _ROWS = [
         False,
     ),
     ('cluster.logging.audit_logs.tags', 'list', 'restart', 'monitoring', True, False),
+    (
+        'cluster.failure_capture.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
     ('cluster.network.client_ip', 'list', 'deployment', 'network', False, False),
     ('cluster.network.ssh_client_ip', 'list', 'deployment', 'network', False, False),
+    ('bastion-host.site_hook_sha256', 'string', 'deployment', 'network', True, False),
+    (
+        'scheduler.compute_node_site_hook_sha256',
+        'string',
+        'runtime',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
+        'scheduler.ami_builder_site_hook_sha256',
+        'string',
+        'runtime',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.dcv_host_site_hook_sha256',
+        'string',
+        'runtime',
+        'desktop-lifecycle',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.ami_builder_site_hook_sha256',
+        'string',
+        'runtime',
+        'desktop-lifecycle',
+        True,
+        False,
+    ),
     (
         'cluster.network.cluster_prefix_list_max_entries',
         'integer',
@@ -2940,6 +2982,118 @@ _ROWS = [
     ),
     ('metrics.dogstatsd.url', 'string', 'restart', 'monitoring', False, False),
     (
+        'metrics.health.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.ad_automation.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.bastion.enabled',
+        'boolean',
+        'deployment',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.certificates.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.directory.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.ecs.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.gateway_certificate.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.home_probe.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.image_bakes.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.drift_checks.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.stack_expiry.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.pbs.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.secrets.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'metrics.health.storage_mounts.enabled',
+        'boolean',
+        'runtime',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
         'metrics.prometheus.remote_read.url',
         'string',
         'restart',
@@ -3184,6 +3338,22 @@ _ROWS = [
         'job-placement',
         False,
         True,
+    ),
+    (
+        'scheduler.job_cache.backup_interval_seconds',
+        'integer',
+        'restart',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
+        'scheduler.job_cache.finished_job_retention_days',
+        'integer',
+        'runtime',
+        'job-placement',
+        True,
+        False,
     ),
     (
         'scheduler.job_provisioning.batch_provisioning_wait_interval_seconds',
@@ -3485,6 +3655,14 @@ _ROWS = [
         False,
     ),
     (
+        'scheduler.log_archive.s3_retention_days',
+        'integer',
+        'bootstrap',
+        'monitoring',
+        True,
+        False,
+    ),
+    (
         'scheduler.provisioning_lifecycle_events.retention_days',
         'integer',
         'runtime',
@@ -3505,6 +3683,86 @@ _ROWS = [
         'list',
         'deployment',
         'network',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.enabled',
+        'boolean',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.digest_weekday',
+        'integer',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.dry_run',
+        'boolean',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.failed_retention_days',
+        'integer',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.file_systems',
+        'list',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.kill_switch',
+        'boolean',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.max_folders_per_run',
+        'integer',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.max_run_bytes_percent',
+        'integer',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.max_run_share_percent',
+        'integer',
+        'runtime',
+        'job-placement',
+        False,
+        False,
+    ),
+    (
+        'scheduler.scratch_cleanup.success_retention_days',
+        'integer',
+        'runtime',
+        'job-placement',
         False,
         False,
     ),
@@ -4187,6 +4445,62 @@ _ROWS = [
         'integer',
         'runtime',
         'desktop-lifecycle',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.expiry.default_days',
+        'integer',
+        'runtime',
+        'desktop-lifecycle',
+        False,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.expiry.digest_enabled',
+        'boolean',
+        'runtime',
+        'desktop-lifecycle',
+        False,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.expiry.enforce_from',
+        'string',
+        'runtime',
+        'desktop-lifecycle',
+        False,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.expiry.exempt_amis',
+        'list',
+        'runtime',
+        'desktop-lifecycle',
+        False,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.expiry.warn_days',
+        'integer',
+        'runtime',
+        'desktop-lifecycle',
+        False,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64',
+        'string',
+        'runtime',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64',
+        'string',
+        'runtime',
+        'software',
         True,
         False,
     ),
@@ -4977,7 +5291,7 @@ _ROWS = [
 ]
 
 
-_EFFECTS = {'runtime', 'restart', 'deployment'}
+_EFFECTS = {'runtime', 'restart', 'deployment', 'bootstrap'}
 SETTINGS_GROUPS = {
     'general': 'General',
     'desktops': 'Desktops',
@@ -5029,6 +5343,7 @@ DESTINATION_SECTIONS = (
     'Portal',
     'Regional defaults',
     'Resource tags',
+    'Scratch cleanup',
     'Scratch storage',
     'Sign-in',
     'Stopped desktop cleanup',
@@ -5068,6 +5383,7 @@ _DESTINATION_GROUPS = {
     'Portal': 'general',
     'Regional defaults': 'general',
     'Resource tags': 'deployment',
+    'Scratch cleanup': 'jobs',
     'Scratch storage': 'jobs',
     'Sign-in': 'users-and-sign-in',
     'Stopped desktop cleanup': 'desktops',
@@ -5154,6 +5470,7 @@ _SECTIONS = {
     'scheduler.notifications': 'Notifications',
     'scheduler.opensearch': 'Analytics',
     'scheduler.provisioning_lifecycle_events': 'Logs',
+    'scheduler.scratch_cleanup': 'Scratch cleanup',
     'scheduler.scratch_storage': 'Scratch storage',
     'scheduler': 'Job limits and placement',
     'shared-storage.apps.fsx_netapp_ontap.metrics': 'Storage measurement',
@@ -5241,10 +5558,48 @@ _UNITS = {
     'percent': '%',
 }
 _LABELS = {
+    'scheduler.log_archive.s3_retention_days': 'Log archive retention (days)',
     'cluster-manager.web_terminal.enabled': 'Browser terminal',
+    'cluster.failure_capture.enabled': 'Keep what failed hosts said',
+    'virtual-desktop-controller.software_stacks.expiry.default_days': 'Default expiry (days)',
+    'virtual-desktop-controller.software_stacks.expiry.digest_enabled': 'Weekly email to owners',
+    'virtual-desktop-controller.software_stacks.expiry.enforce_from': 'Hide expired stacks from (YYYY-MM-DD)',
+    'virtual-desktop-controller.software_stacks.expiry.exempt_amis': 'Images that never expire',
+    'virtual-desktop-controller.software_stacks.expiry.warn_days': 'Warn this many days before',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64': 'Image builder type (x86_64)',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64': 'Image builder type (arm64)',
+    'metrics.health.drift_checks.enabled': 'Daily configuration checks',
+    'metrics.health.stack_expiry.enabled': 'Stack expiry and orphan desktop counts',
     'cluster-manager.web_terminal.idle_timeout_seconds': 'Terminal input-idle timeout (seconds)',
     'cluster-manager.web_terminal.max_duration_seconds': 'Terminal maximum duration (seconds)',
     'cluster-manager.web_terminal.max_sessions_per_user': 'Terminal connections per account',
+    'metrics.health.enabled': 'All cluster health collectors',
+    'metrics.health.ad_automation.enabled': 'Directory automation',
+    'metrics.health.bastion.enabled': 'Bastion',
+    'bastion-host.site_hook_sha256': 'Bastion site hook SHA-256',
+    'scheduler.compute_node_site_hook_sha256': 'Compute node site hook SHA-256',
+    'scheduler.ami_builder_site_hook_sha256': 'Compute image bake site hook SHA-256',
+    'virtual-desktop-controller.dcv_host_site_hook_sha256': 'Desktop site hook SHA-256',
+    'virtual-desktop-controller.ami_builder_site_hook_sha256': 'Desktop image bake site hook SHA-256',
+    'metrics.health.certificates.enabled': 'Certificate expiry',
+    'metrics.health.directory.enabled': 'File server and directory',
+    'metrics.health.ecs.enabled': 'Control plane tasks',
+    'metrics.health.gateway_certificate.enabled': 'Gateway certificate expiry',
+    'metrics.health.home_probe.enabled': 'Home directory check',
+    'metrics.health.image_bakes.enabled': 'Image rows',
+    'metrics.health.pbs.enabled': 'PBS server',
+    'metrics.health.secrets.enabled': 'Secret ages',
+    'metrics.health.storage_mounts.enabled': 'File system levels',
+    'scheduler.scratch_cleanup.enabled': 'Automatic cleanup',
+    'scheduler.scratch_cleanup.dry_run': 'Dry run only',
+    'scheduler.scratch_cleanup.kill_switch': 'Stop all removals',
+    'scheduler.scratch_cleanup.success_retention_days': 'Successful jobs: remove after (days)',
+    'scheduler.scratch_cleanup.failed_retention_days': 'Failed jobs: remove after (days)',
+    'scheduler.scratch_cleanup.digest_weekday': 'Weekly digest day',
+    'scheduler.scratch_cleanup.file_systems': 'File systems to clean',
+    'scheduler.scratch_cleanup.max_folders_per_run': 'Most folders per run',
+    'scheduler.scratch_cleanup.max_run_bytes_percent': 'Most capacity per run (%)',
+    'scheduler.scratch_cleanup.max_run_share_percent': 'Most job folders per run (%)',
     'scheduler.scratch_storage.ebs.mount_point': 'EBS scratch mount path',
     'scheduler.scratch_storage.fsx_lustre.mount_point': 'Lustre scratch mount path',
     'scheduler.scratch_storage.instance_store.mount_point': 'Instance store scratch mount path',
@@ -5429,6 +5784,9 @@ _CHOICES = {
     'spot_maintenance_strategies': ['', 'CapacityRebalance'],
     'key_type': ['', 'customer-managed', 'aws-managed'],
 }
+_BUILDER_TYPE_PREFIX = (
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types'
+)
 _KEY_CHOICES = {
     'cluster.logging.default_log_level': [
         'DEBUG',
@@ -5485,8 +5843,55 @@ _KEY_CHOICES = {
         'spread',
     ],
     'cluster-manager.bedrock.budgets.action': ['block', 'warn'],
+    **{
+        f'{_BUILDER_TYPE_PREFIX}.{architecture}': [
+            '',
+            *(t for t in types if not t.startswith('g')),
+        ]
+        for architecture, types in BUILDER_INSTANCE_TYPES.items()
+    },
 }
 _DESCRIPTIONS = {
+    'scheduler.log_archive.s3_retention_days': 'How long the cluster bucket keeps the scheduler log archive, PBS accounting records included. 0 keeps it forever; otherwise at least 30. Applied by ideactl bootstrap, not by an upgrade or deploy.',
+    'virtual-desktop-controller.software_stacks.expiry.default_days': 'For a software stack the monthly rebuild does not feed and with no date of its own, how long after it was created it expires.',
+    'virtual-desktop-controller.software_stacks.expiry.digest_enabled': 'Once a week at most, emails each owner the stacks past or near their date. Stacks with no owner go to the cluster administrator.',
+    'virtual-desktop-controller.software_stacks.expiry.enforce_from': 'From this day, expired stacks are not offered for new desktops. Empty means warnings only and nothing is hidden. Existing desktops keep working either way.',
+    'virtual-desktop-controller.software_stacks.expiry.exempt_amis': 'AMI IDs whose stacks never expire or warn.',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64': 'Instance type that bakes x86_64 desktop and compute images (GPU images keep their GPU builder). Empty uses c7i.2xlarge for Linux images (c7i.large or m7i.large where the region does not offer it or a launch is refused) and m7i.large for Windows. Larger builders bake faster and draw on the same On-Demand quota as jobs; see max_concurrent_bakes.',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64': 'Instance type that bakes arm64 desktop and compute images. Empty uses c8g.2xlarge (m8g.large where the region does not offer it or a launch is refused). Larger builders bake faster and draw on the same On-Demand quota as jobs; see max_concurrent_bakes.',
+    'virtual-desktop-controller.software_stacks.expiry.warn_days': 'The new desktop form warns about a stack from this many days before it expires.',
+    'metrics.health.drift_checks.enabled': 'Once a day, reads the settings that must hold on every cluster, such as file server signing and DNS, and reports any that differ. Changes nothing.',
+    'metrics.health.enabled': 'Off stops every cluster health collector below. Each also has its own switch. Health metrics are sent only with the dogstatsd metrics provider.',
+    'metrics.health.ad_automation.enabled': "Directory automation queue depth, requests and errors, and days until the admin account's password expires.",
+    'scheduler.compute_node_site_hook_sha256': "The SHA-256 of the site hook each compute node runs at bootstrap, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'scheduler.ami_builder_site_hook_sha256': "The SHA-256 of the site hook a compute node image bake runs, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'virtual-desktop-controller.dcv_host_site_hook_sha256': "The SHA-256 of the site hook each desktop runs at bootstrap, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'virtual-desktop-controller.ami_builder_site_hook_sha256': "The SHA-256 of the site hook a desktop image bake runs, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'bastion-host.site_hook_sha256': 'The SHA-256 of the site hook the bastion runs at start, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; on a mismatch the bastion skips the hook and starts without it. Read when the bastion stack deploys.',
+    'metrics.health.bastion.enabled': 'Once a minute on each bastion task: whether sshd answers, sessions and refused connections. Read when the bastion stack deploys.',
+    'metrics.health.certificates.enabled': 'Every hour, days left on the load balancer certificates and on the certificates IDEA reads itself.',
+    'metrics.health.directory.enabled': "Every five minutes, each file server's LDAP, CIFS signing and DNS settings, and the domain controller addresses. Reads settings only.",
+    'metrics.health.ecs.enabled': 'Every five minutes, control plane task stops by reason, running and desired tasks, and rollouts.',
+    'metrics.health.gateway_certificate.enabled': 'Every hour, days left on the desktop gateway certificate.',
+    'metrics.health.home_probe.enabled': "Every five minutes, times a look at /data/home from a separate process. Reads no one's folder.",
+    'metrics.health.image_bakes.enabled': 'Every five minutes, the state of each desktop and compute image row and whether it is current on the running release.',
+    'metrics.health.stack_expiry.enabled': 'Counts software stacks by expiry state and desktop instances with no desktop. The weekly owner email is sent either way.',
+    'metrics.health.pbs.enabled': 'Every minute, whether the PBS server answers and is active, and its jobs by state.',
+    'metrics.health.secrets.enabled': 'Every six hours, ages of the secrets tagged for this cluster, from metadata only, and passwords waiting for their directory sync.',
+    'metrics.health.storage_mounts.enabled': 'Every five minutes, whether each shared storage mount answers, and its used space and inodes.',
+    'scheduler.job_cache.backup_interval_seconds': 'How often the job cache is copied to the scheduler volume when it changed. A task that stops without an orderly shutdown restores a copy up to this old.',
+    'scheduler.job_cache.finished_job_retention_days': 'Finished jobs are deleted from the scheduler job cache this many days after they end. 0 keeps them.',
+    'scheduler.scratch_cleanup.max_folders_per_run': 'How many folders one hourly run can remove. The rest wait for the next run.',
+    'cluster.failure_capture.enabled': "On a failed desktop or image bake, sends the host's console and the end of its startup log to the module log, and shows a plain cause in the portal.",
+    'scheduler.scratch_cleanup.success_retention_days': 'After a job with exit status 0 ends.',
+    'scheduler.scratch_cleanup.failed_retention_days': 'After any other job that ran ends, including one killed or deleted.',
+    'scheduler.scratch_cleanup.digest_weekday': 'The day owners get their digest and administrators their summary, in UTC. 0 is Monday, 6 is Sunday.',
+    'scheduler.scratch_cleanup.enabled': 'Off by default. Gives the numbered scratch folder of each job that finishes a removal date. Jobs that finish while this is off stay until you run a backfill.',
+    'scheduler.scratch_cleanup.dry_run': 'Records dates and reports what would be removed. Removes nothing and tells nobody. Turn off after reviewing the results on the Scratch cleanup page.',
+    'scheduler.scratch_cleanup.kill_switch': 'Stops every removal within a couple of seconds, including one in progress.',
+    'scheduler.scratch_cleanup.file_systems': 'Shared storage names to clean, for example scratch. Nothing is cleaned while this is empty.',
+    'scheduler.scratch_cleanup.max_run_bytes_percent': 'A run that would remove more than this share of capacity stops and alerts instead.',
+    'scheduler.scratch_cleanup.max_run_share_percent': 'A run that would remove more than this share of job folders stops and alerts instead.',
     'cluster-manager.web_terminal.enabled': 'Allow browser terminals. Disabling closes active connections at the next watchdog check.',
     'cluster-manager.web_terminal.idle_timeout_seconds': 'Close connections without user input. Default: 1800 seconds. Applies to new connections.',
     'cluster-manager.web_terminal.max_duration_seconds': 'Maximum connection lifetime. Default: 43200 seconds. Applies to new connections.',
@@ -5501,7 +5906,7 @@ _DESCRIPTIONS = {
     'cluster.costs.compute_rate_multiplier': 'Multiplies the on-demand instance rate for job and desktop compute, e.g. 0.72 when savings plans cut compute about 28%. 1.0 shows list price. Must be above 0 and at most 1.5, otherwise it is ignored. Storage and spot are not scaled. Jobs keep the rate in force when they finished; desktop costs pick up a change on the next 15-minute collection.',
     'cluster-manager.metrics.cost.enabled': 'Collect Cost Explorer daily totals in the commercial AWS partition with the dogstatsd metrics provider. Other partitions and providers do not support this collection.',
     'cluster-manager.metrics.cost.by_account': "Split cost metrics by linked AWS account; only a payer account that can see other accounts' spend needs this.",
-    'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history.",
+    'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history. Cost Explorer can post a month's first-day tax several days late, so a shorter window can leave a day short.",
     'cluster-manager.metrics.cost.interval_hours': 'Hours between collection runs.',
     'scheduler.cost_estimation.fsx_lustre': 'USD per GB-hour for job scratch storage. Fetch assumes SCRATCH_2/SSD and divides the monthly price by 730 hours as an estimation convention.',
     'scheduler.cost_estimation.provisioned_iops': 'USD per provisioned io1 IOPS-month; fractional rates are preserved.',
@@ -5581,6 +5986,9 @@ _HIDDEN_KEYS = {
     'analytics.opensearch.domain_vpc_endpoint_url',
     'scheduler.retain_dns_record',
     'scheduler.use_stable_server_name',
+    # cluster-manager sets the mode of this directory and file at start
+    'cluster-manager.logging.logs_directory',
+    'cluster-manager.logging.default_log_file_name',
     'cluster-manager.web_portal.copyright_text',
     'cluster-manager.web_portal.default_log_level',
     'scheduler.provider',
@@ -5626,6 +6034,10 @@ _READ_ONLY_PREFIXES = (
     'virtual-desktop-controller.server',
 )
 _READ_ONLY_KEYS = {
+    # every running module keeps the name it read at start, and nothing renames the
+    # user pool group or moves its members: not a setting to change at runtime
+    'identity-provider.cognito.administrators_group_name',
+    'identity-provider.cognito.managers_group_name',
     'analytics.kinesis.kms_key_id',
     'analytics.kinesis.removal_policy',
     'analytics.opensearch.default_number_of_shards',
@@ -5693,6 +6105,33 @@ _IMMUTABLE_STORAGE_LEAVES = {
     'storage_type',
 }
 _PRIVILEGED_GROUP_KEYS = (*_DEFAULTS, 'directoryservice.sudoers.group_name')
+MOUNT_DIR_PATTERN = r'^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$'
+MOUNT_OPTIONS_PATTERN = (
+    r'^[A-Za-z0-9_][A-Za-z0-9=,._:/+@-]*( [A-Za-z0-9=,._:/+@-]+){1,3}$'
+)
+# shared storage mounted in one of these would put user-writable files where the
+# operating system reads its programs and configuration as root; the last three only
+# as the directory itself, so /opt/<software> stays usable
+_SYSTEM_MOUNT_ROOTS = frozenset(
+    {
+        'bin',
+        'boot',
+        'dev',
+        'etc',
+        'lib',
+        'lib32',
+        'lib64',
+        'libx32',
+        'proc',
+        'root',
+        'run',
+        'sbin',
+        'sys',
+        'usr',
+        'var',
+    }
+)
+_SYSTEM_MOUNT_DIRS = frozenset({'/opt', '/srv', '/tmp'})
 
 
 def _words(value):
@@ -5871,12 +6310,33 @@ def _definition(row):
                 validation['maximum'] = 10
         if key == 'cluster-manager.accounts.reconcile.interval_minutes':
             validation.update(minimum=1, maximum=1440)
+        if key == (
+            'virtual-desktop-controller.dcv_session.stopped_session_cleanup.'
+            'warn_days_before'
+        ):
+            # the warning's delivery receipt is kept 400 days: a window within that
+            # still finds it when the cleanup looks
+            validation['maximum'] = 365
         if leaf == 'sqs_wait_time':
             validation.update(maximum=20)
         if leaf == 'polling_messages_max':
             validation.update(minimum=1, maximum=10)
         if leaf == 'default_log_level':
             validation.update(maximum=5)
+        if key.startswith('scheduler.scratch_cleanup.'):
+            if leaf.endswith('_percent'):
+                validation.update(minimum=1, maximum=100)
+            elif leaf == 'max_folders_per_run':
+                validation.update(minimum=1)
+            elif leaf.endswith('_retention_days'):
+                validation.update(minimum=14)
+            elif leaf == 'digest_weekday':
+                validation.update(minimum=0, maximum=6)
+        if key.startswith('virtual-desktop-controller.software_stacks.expiry.'):
+            if leaf == 'default_days':
+                validation.update(minimum=1)
+            elif leaf == 'warn_days':
+                validation.update(minimum=0)
         if key == 'scheduler.efa.max_interfaces':
             validation.update(minimum=1, maximum=2)
         if key == 'cluster.costs.compute_rate_multiplier':
@@ -5896,10 +6356,29 @@ def _definition(row):
         validation['pattern'] = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
     if key == 'cluster-manager.web_portal.custom_dashboard.url':
         validation['pattern'] = r'^https?://[^\s]+$'
+    # proxy settings are written into a quoted shell file that every host's root bootstrap sources
+    if key == 'cluster.network.https_proxy':
+        validation['pattern'] = r'^https?://[A-Za-z0-9._~%:@\[\]-]+/?$'
+    if key == 'cluster.network.no_proxy':
+        validation['pattern'] = r'^[A-Za-z0-9._*:/\[\]-]+(,[A-Za-z0-9._*:/\[\]-]+)*$'
+    # Mount settings are written into the root bootstrap of every host: plain path
+    # characters for a directory, the fstab option grammar (the file system type, then up
+    # to three fields of option characters, one space apart) for options, one letter for a
+    # Windows drive.
     if leaf in ('mount_dir', 'mount_point'):
-        validation['pattern'] = r'^/[^\x00]*$'
+        validation['pattern'] = MOUNT_DIR_PATTERN
+    if leaf == 'mount_options':
+        validation['pattern'] = MOUNT_OPTIONS_PATTERN
+    if leaf == 'mount_drive':
+        validation['pattern'] = r'^[A-Za-z]$'
     if key in _PRIVILEGED_GROUP_KEYS:
         validation['pattern'] = r'^[A-Za-z0-9][A-Za-z0-9_-]*$'
+    if key.endswith('site_hook_sha256'):
+        validation['pattern'] = r'^[0-9a-f]{64}$'
+    if key == 'directoryservice.sudoers.group_name':
+        # single spaces between plain words: the shipped AWS Managed Microsoft AD value
+        # is "AWS Delegated Administrators", which the join script quotes and escapes
+        validation['pattern'] = r'^[A-Za-z0-9][A-Za-z0-9_-]*( [A-Za-z0-9_-]+)*$'
     if leaf == 'provider' or key in (
         'cluster-manager.web_portal.title',
         'cluster.timezone',
@@ -6085,11 +6564,75 @@ def coerce_value(setting, value):
             invalid('must be greater than 0 and at most 1.5')
     if key == 'cluster-manager.web_portal.default_landing_page' and value == 'home':
         value = 'my-costs'
+    if key.startswith(f'{_BUILDER_TYPE_PREFIX}.') and value:
+        # a type of the other architecture is named as such, not as off the list
+        try:
+            check_builder_instance_type(value, key.rsplit('.', 1)[-1])
+        except exceptions.SocaException as error:
+            invalid(error.message)
     if kind == 'enum' and value not in setting['choices']:
         invalid('must be one of: ' + ', '.join(setting['choices']))
+    if key.endswith('site_hook_sha256') and isinstance(value, str):
+        # every reader lower-cases it; surrounding space is a paste, not a digest
+        value = value.strip().lower()
     if value and 'pattern' in rule and not re.fullmatch(rule['pattern'], value):
         invalid('does not match the required format')
+    if value and rule.get('pattern') == MOUNT_DIR_PATTERN:
+        if value.split('/')[1] in _SYSTEM_MOUNT_ROOTS or value in _SYSTEM_MOUNT_DIRS:
+            invalid('must not be a system directory')
     return value
+
+
+def _mount_points(values, prefix=''):
+    for name, value in values.items():
+        path = f'{prefix}.{name}' if prefix else name
+        if isinstance(value, dict):
+            yield from _mount_points(value, path)
+        elif name == 'mount_point' and isinstance(value, str) and value:
+            yield path, value
+
+
+def _refuse_scratch_on_shared_storage(module, values, config):
+    """a scratch mount on a shared file system's directory takes its fstab entry"""
+    storage = config.get_config('shared-storage', default={}) or {}
+    shared = [
+        entry.get('mount_dir', None)
+        for entry in storage.values()
+        if hasattr(entry, 'get') and isinstance(entry.get('mount_dir', None), str)
+    ]
+    for path, point in _mount_points(values):
+        for directory in shared:
+            directory = directory.rstrip('/')
+            if directory and (point == directory or point.startswith(directory + '/')):
+                raise exceptions.invalid_params(
+                    f'{module}.{path} must not be a shared storage mount directory '
+                    f'or under one ({directory})'
+                )
+
+
+def stored_storage_refusals(config, catalog=CATALOG):
+    """
+    the stored shared-storage mount values the catalog would refuse if saved now. They
+    stay in service until corrected, so this only names them.
+    """
+    definitions = {
+        item['key']: item for item in catalog if item['module'] == 'shared-storage'
+    }
+    storage = config.get_config('shared-storage', default={}) or {}
+    refused = []
+    for name, entry in storage.items():
+        if not hasattr(entry, 'get'):
+            continue
+        for leaf in ('mount_dir', 'mount_options', 'mount_drive'):
+            value = entry.get(leaf, None)
+            key = f'shared-storage.{name}.{leaf}'
+            if value is None or key not in definitions:
+                continue
+            try:
+                coerce_value(definitions[key], value)
+            except exceptions.SocaException as error:
+                refused.append((key, error.message))
+    return refused
 
 
 def coerce_settings(
@@ -6124,6 +6667,18 @@ def coerce_settings(
         return result
 
     values = visit(settings)
+    if config is not None and module != 'shared-storage':
+        _refuse_scratch_on_shared_storage(module, values, config)
+    retention = (
+        values.get('log_archive', {}).get('s3_retention_days')
+        if module == 'scheduler'
+        else None
+    )
+    if retention is not None and 0 < retention < 30:
+        # ideactl bootstrap refuses these, so a saved one would stop the next bootstrap
+        raise exceptions.invalid_params(
+            'scheduler.log_archive.s3_retention_days must be 0 (keep forever) or at least 30'
+        )
     if module == 'identity-provider':
         cognito = values.get('cognito', {})
         names = (

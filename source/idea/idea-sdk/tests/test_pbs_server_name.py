@@ -69,7 +69,8 @@ def test_first_bootstrap_clients_use_the_server_name(template, stable):
     script = render(template, 'rocky9', config=config(stable))
     expected = server_name(STABLE_NAME)
     assert written(script, r'^(?:echo -e ")?PBS_SERVER=(\S+)$') == [expected]
-    assert written(script, r'^\\\$clienthost (\S+)$') == [expected]
+    # the MoM config is written through a quoted here-document, so the line is literal
+    assert written(script, r'^\$clienthost (\S+)$') == [expected]
     # with the stable name the short name resolves through the private zone, not a pin
     assert ('idea-scheduler.conf' in script) == stable
 

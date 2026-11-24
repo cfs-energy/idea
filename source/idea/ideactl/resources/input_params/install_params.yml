@@ -536,11 +536,10 @@ SocaInputParamSpec:
       markdown: ~
       validate:
         required: yes
+      # FSx for Lustre is for job scratch only: the control plane mounts apps and data as NFS
       choices:
         - title: 'Amazon EFS'
           value: efs
-        - title: 'Amazon FSx for Lustre'
-          value: fsx_lustre
       when:
         param: existing_resources
         contains: 'shared-storage:apps'
@@ -567,11 +566,10 @@ SocaInputParamSpec:
       markdown: ~
       validate:
         required: yes
+      # FSx for Lustre is for job scratch only: the control plane mounts apps and data as NFS
       choices:
         - title: 'Amazon EFS'
           value: efs
-        - title: 'Amazon FSx for Lustre'
-          value: fsx_lustre
       when:
         param: existing_resources
         contains: 'shared-storage:data'

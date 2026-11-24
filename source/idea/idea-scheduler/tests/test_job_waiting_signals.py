@@ -443,7 +443,8 @@ def test_status_reason_reports_capacity_and_queue_usage(
         (
             SocaJobState.HELD,
             'Last error: Capacity unavailable. Use qdel to delete.',
-            'Held after attempt 3 of 3: Capacity unavailable.',
+            'Held after attempt 3 of 3: Capacity unavailable. '
+            'Delete this job and resubmit with changes, or contact an administrator.',
         ),
     ],
 )
@@ -519,3 +520,20 @@ def test_manual_hold_preserves_explanation(context, job_cache, reason, error, ex
     job.error_message = error
     apply_waiting_signals(context, [job])
     assert job.status_reason == expected
+
+
+def test_a_newly_held_job_states_the_next_step_once(context, job_cache):
+    context.queue_profiles = MockQueueProfiles()
+    job = mock_job(state=SocaJobState.HELD)
+    job.error_message = (
+        'Job held: provisioning failed 3 times. Last error: Capacity unavailable. '
+        'Delete this job and resubmit with changes, or contact an administrator.'
+    )
+    job.reason_class = 'retries_exhausted'
+    for _ in range(3):
+        job_cache.increment_job_provisioning_retry(job_id=job.job_id)
+    apply_waiting_signals(context, [job])
+    assert job.status_reason == (
+        'Held after attempt 3 of 3: Capacity unavailable. '
+        'Delete this job and resubmit with changes, or contact an administrator.'
+    )

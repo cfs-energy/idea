@@ -18,6 +18,7 @@ from ideadatamodel import (
 )
 from ideasdk.service import SocaService
 from ideasdk.pubsub import SocaPubSub
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 from ideascheduler.app.app_protocols import NodeMonitorProtocol
 from ideascheduler.app.provisioning import NodeHouseKeeper
@@ -122,6 +123,8 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
             name='node-monitor', target=self._monitor_nodes
         )
         self._housekeeper = NodeHouseKeeper(self._context)
+        # ponytail: grows by one id per orphaned instance for the life of the process
+        self._queueless_instances: set = set()
         self._monitor = Condition()
         self._state = NodeMonitorState(context=self._context)
         self._instance_updates_available_event = Event()
@@ -159,6 +162,22 @@ class NodeMonitor(SocaService, NodeMonitorProtocol):
 
             if existing_node is not None:
                 return
+
+            # A queue deleted while its capacity was still launching leaves an instance with
+            # no node to manage. Every scan would otherwise retry a create PBS can only refuse.
+            if self._context.scheduler.get_queue(create_or_provision.queue) is None:
+                if instance.instance_id not in self._queueless_instances:
+                    self._queueless_instances.add(instance.instance_id)
+                    HealthMetrics(self._context).add(
+                        'orphan_sweep', kind='instance_without_queue'
+                    )
+                    self._logger.warning(
+                        f'instance {instance.instance_id} ({instance.node_host}) belongs to '
+                        f'queue {create_or_provision.queue}, which no longer exists. It is not '
+                        f'registered with the scheduler; stack: {create_or_provision.compute_stack}'
+                    )
+                return
+            self._queueless_instances.discard(instance.instance_id)
 
             job = self._context.aws_util().get_soca_job_from_stack(
                 stack_name=create_or_provision.compute_stack

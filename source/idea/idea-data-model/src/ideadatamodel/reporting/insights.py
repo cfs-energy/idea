@@ -75,6 +75,8 @@ class JobsInsights(InsightModel):
     # cost of the jobs behind the efficiency figures, the base wasted_cost is a share of
     efficiency_cost: Decimal | None = None
     jobs_with_efficiency: int = 0
+    # finished jobs with no price: they count in `count` and in no cost figure
+    unpriced: int = 0
     by_user: list[Ranked] = Field(default_factory=list)
     by_project: list[Ranked] = Field(default_factory=list)
     by_queue: list[Ranked] = Field(default_factory=list)
@@ -103,6 +105,10 @@ class DesktopsInsights(InsightModel):
     by_user: list[Ranked] = Field(default_factory=list)
     by_project: list[Ranked] = Field(default_factory=list)
     daily_top_users: list[DailyUserCost] = Field(default_factory=list)
+    # earliest day with stored desktop costs; earlier days of a long period have none
+    available_from: date | None = None
+    # days in the period the collector could not cost; not the same as a $0 day
+    missing_days: int = 0
     # from the idle stop's checks; desktops without checks are left out, never counted as in use
     desktops_with_activity: int = 0
     checked_hours: float | None = None
@@ -152,6 +158,8 @@ class ReportingInsights(InsightModel):
     storage: StorageInsights = Field(default_factory=StorageInsights)
     budgets: list[BudgetInsight] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list, max_length=3)
+    # sources that could not be read for this report, so empty does not mean none
+    unavailable: list[str] = Field(default_factory=list)
 
 
 class GetReportingInsightsRequest(ReportingPeriodRequest):

@@ -58,6 +58,7 @@ class SchedulerAppContext(SocaContext):
         self.scheduler: Optional[SocaSchedulerProtocol] = None
         self.instance_cache: Optional[InstanceCacheProtocol] = None
         self.job_cache: Optional[JobCacheProtocol] = None
+        self.scratch_cleanup = None
         self.job_monitor: Optional[JobMonitorProtocol] = None
         self.node_monitor: Optional[NodeMonitorProtocol] = None
         self.job_submission_tracker: Optional[JobSubmissionTrackerProtocol] = None
@@ -88,11 +89,16 @@ class SchedulerAppContext(SocaContext):
 
     def get_job_dir(self, job: SocaJob):
         # Existing nodes retain the absolute path embedded in their bootstrap package.
+        from ideascheduler.app.scheduler.job_param_builder import (
+            stored_job_identity_error,
+        )
+
+        # the path is rendered into the node's root bootstrap: a value read back from a
+        # job queued before the submission check is refused here too (U03)
+        error = stored_job_identity_error(job)
+        if error is not None:
+            raise exceptions.invalid_job(error)
         if job.is_ephemeral_capacity():
-            if not job.job_uid:
-                raise exceptions.invalid_job(
-                    'job_uid is required for ephemeral job resources'
-                )
             job_id_or_job_group = f'{job.job_id}-{job.job_uid}'
         else:
             job_id_or_job_group = job.get_job_group()

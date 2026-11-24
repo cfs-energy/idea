@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
 const images = resolve(import.meta.dirname, "../../../../../deployment/ecr");
 for (const script of ["idea-control-plane/roles/scheduler.sh"]) {
-  for (const state of ["fresh", "existing", "marked", "habitat-failure"]) {
+  for (const state of ["fresh", "existing", "marked", "interrupted", "interrupted-in-habitat", "habitat-failure"]) {
     test(`${script}: ${state}`, () => {
       const work = mkdtempSync(join(tmpdir(), "scheduler-settings-"));
       try {
@@ -24,17 +24,26 @@ for (const script of ["idea-control-plane/roles/scheduler.sh"]) {
           for (const file of files) writeFileSync(join(home, file), "operator configuration\n");
           if (state === "marked") writeFileSync(join(home, ".idea-server-configured"), "existing marker");
         }
+        if (state === "interrupted" || state === "interrupted-in-habitat") {
+          // a first start that stopped after pbs_habitat (or inside it), before the server was configured
+          for (const dir of ["datastore/base", "server_priv", "sched_priv"]) mkdirSync(join(home, dir), { recursive: true });
+          writeFileSync(join(home, "sched_priv/sched_config"), "compute_node\n");
+          writeFileSync(join(home, ".idea-server-creating"), "earlier start");
+          if (state === "interrupted") writeFileSync(join(home, ".idea-habitat-done"), "earlier start");
+        }
         const source = readFileSync(join(images, script), "utf8");
-        const start = source.indexOf('if [[ ! -d "${PBS_HOME}/datastore" ]]');
-        const end = source.indexOf("\nshutdown()");
+        const start = source.indexOf('CREATING="${PBS_HOME}/.idea-server-creating"');
+        const end = source.indexOf('\nlog "starting pbs_sched"');
         assert.ok(start >= 0 && end > start);
         // Isolate startup configuration from host paths and installed daemons.
         // The real shell branches still decide whether stored policy is changed.
-        const body = source.slice(start, end).replaceAll(/\/opt\/pbs\/(?:libexec|bin|sbin)\//g, "");
+        // The set-id strip changes the machine it runs on (root in Linux CI); the image check runs it.
+        const body = source.slice(start, end).replaceAll(/\/opt\/pbs\/(?:libexec|bin|sbin)\//g, "")
+          .replace("/opt/idea/roles/setid_strip.sh /usr /opt", "echo strip-ran >> \"$RECORD\"");
         const result = spawnSync("bash", ["-c", `set -euo pipefail
 log() { :; }
 install() { :; }
-aws() { echo None; }
+aws() { echo "aws $*" >> "$RECORD"; echo None; }
 pbs_habitat() {
   echo habitat >> "$RECORD"
   if [[ "$FAIL_HABITAT" == 1 ]]; then return 1; fi
@@ -50,16 +59,39 @@ ${body}`], {
           encoding: "utf8", timeout: 10_000,
           env: { ...process.env, PBS_HOME: home, RECORD: record, FAIL_HABITAT: state === "habitat-failure" ? "1" : "0",
             IDEA_SCHEDULER_DNS_NAME: "scheduler.example.invalid", IDEA_CLUSTER_NAME: "sample-cluster",
-            AWS_DEFAULT_REGION: "us-east-2", IDEA_APP_DEPLOY_DIR: work, IDEA_ROUTE53_ZONE_ID: "" },
+            AWS_DEFAULT_REGION: "us-east-2", IDEA_APP_DEPLOY_DIR: work,
+            // a fresh start also asks execution hosts to re-read the address
+            IDEA_ROUTE53_ZONE_ID: state === "fresh" ? "Z0EXAMPLE" : "", TASK_IP: "10.0.0.5",
+            PBS_DATA_SERVICE_USER: userInfo().username, IDEA_MODULE_ID: "sched-custom" },
         });
         const calls = readFileSync(record, "utf8");
+        if (state === "interrupted-in-habitat") {
+          // a possibly partial datastore is neither configured nor started; the log says what to do
+          assert.equal(result.status, 1);
+          assert.equal(calls, "");
+          assert.ok(existsSync(join(home, ".idea-server-creating")));
+          assert.ok(!existsSync(join(home, ".idea-server-configured")));
+          return;
+        }
         if (state === "habitat-failure") {
           assert.notEqual(result.status, 0);
           assert.equal(calls, "habitat\n");
           return;
         }
         assert.equal(result.status, 0, result.stderr);
-        if (state === "fresh") {
+        if (state === "fresh" || state === "interrupted") {
+          assert.equal(calls.includes("habitat"), state === "fresh");
+          assert.ok(!existsSync(join(home, ".idea-server-creating")));
+          assert.ok(!existsSync(join(home, ".idea-habitat-done")));
+          assert.match(calls, /daemons\nstrip-ran\n/);
+          // server policy is read under this module's id
+          assert.match(calls, /"sched-custom\.openpbs\.server\.flatuid"/);
+          if (state === "fresh") {
+            // exactly the tags the scheduler's Run Command grant conditions on
+            const send = calls.split("\n").find((line) => line.startsWith("aws ssm send-command"));
+            assert.ok(send, calls);
+            assert.match(send!, / --targets Key=tag:idea:ClusterName,Values=sample-cluster Key=tag:idea:NodeType,Values=compute-node Key=tag:idea:ModuleId,Values=sched-custom --document-name AWS-RunShellScript /);
+          }
           assert.match(calls, /set queue normal started = True/);
           assert.match(calls, /set queue normal enabled = True/);
           assert.ok(existsSync(join(home, ".idea-server-configured")));
@@ -170,3 +202,82 @@ for (const [level, root] of [[undefined, "INFO"], ["debug", "DEBUG"], ["bogus", 
     } finally { rmSync(work, { recursive: true, force: true }); }
   });
 }
+
+// a function of the scheduler role, run on its own with stand-ins for the commands it calls
+function roleFunction(name: string): string {
+  const source = readFileSync(join(images, "idea-control-plane/roles/scheduler.sh"), "utf8");
+  const start = source.indexOf(`${name}() {`);
+  const end = source.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start, name);
+  return source.slice(start, end + 3);
+}
+
+test("scheduler role: pbs_sched exiting ends its watch, which the role waits on", () => {
+  const result = spawnSync("bash", ["-c", `set -euo pipefail
+log() { echo "$*"; }
+pgrep() { [[ -f "$ALIVE" ]]; }
+${roleFunction("watch_pbs_sched")}
+touch "$ALIVE"; watch_pbs_sched & pid=$!
+sleep 0.3; rm -f "$ALIVE"; wait "$pid"`], {
+    encoding: "utf8", timeout: 10_000,
+    env: { ...process.env, ALIVE: join(mkdtempSync(join(tmpdir(), "sched-watch-")), "alive"), IDEA_SCHED_WATCH_INTERVAL: "0.05" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "pbs_sched is not running\n");
+  const source = readFileSync(join(images, "idea-control-plane/roles/scheduler.sh"), "utf8");
+  assert.match(source, /^wait -n [^\n]*"\$\{SCHED_WATCH_PID\}"/m);
+});
+
+test("scheduler role: datastore files with another owner are given to the datastore account", () => {
+  const work = mkdtempSync(join(tmpdir(), "datastore-owner-"));
+  try {
+    const home = join(work, "pbs");
+    mkdirSync(join(home, "datastore/base"), { recursive: true });
+    writeFileSync(join(home, "datastore/base/1"), "row");
+    const record = join(work, "chown");
+    // find runs chown itself, so the stand-in is a program on PATH
+    const bin = join(work, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "chown"), `#!/bin/bash\nprintf '%s\\n' "$@" >> "${record}"\n`, { mode: 0o755 });
+    const run = (user: string) => spawnSync("bash", ["-c", `set -euo pipefail
+log() { echo "$*"; }
+${roleFunction("repair_datastore_owner")}
+repair_datastore_owner`], { encoding: "utf8", timeout: 10_000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PBS_HOME: home, PBS_DATA_SERVICE_USER: user } });
+    // the caller owns everything: nothing to change
+    const own = run(userInfo().username);
+    assert.equal(own.status, 0, own.stderr);
+    assert.ok(!existsSync(record));
+    // another account owns the datastore: every entry is handed over, links not followed
+    const other = run("nobody");
+    assert.equal(other.status, 0, other.stderr);
+    const args = readFileSync(record, "utf8").split("\n").filter(Boolean);
+    assert.equal(args[0], "-h");
+    assert.match(args[1]!, /^nobody:/);
+    assert.deepEqual(args.slice(2).sort(), [join(home, "datastore"), join(home, "datastore/base"), join(home, "datastore/base/1")]);
+    assert.match(other.stdout, /gave 3 datastore files back to nobody:/);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+test("broker: registration keeps trying after the first five minutes", () => {
+  const work = mkdtempSync(join(tmpdir(), "broker-register-"));
+  try {
+    const stub = (name: string, body: string) => writeFileSync(join(work, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+    const count = join(work, "count");
+    stub("aws", "echo None");
+    for (const name of ["chown", "setpriv"]) stub(name, "exit 0");
+    // fails 61 times, past the old limit of 60, then succeeds
+    stub("dcv-session-manager-broker", `n=$(( $(cat "${count}" 2>/dev/null || echo 0) + 1 )); echo $n > "${count}"; (( n > 61 )) && echo "Jwk url registered." || exit 1`);
+    const result = spawnSync("bash", [join(images, "idea-control-plane/roles/broker.sh")], {
+      encoding: "utf8", timeout: 20_000,
+      env: { ...process.env, PATH: `${work}:${process.env.PATH}`,
+        IDEA_CLUSTER_NAME: "sample-cluster", IDEA_MODULE_ID: "vdc", AWS_DEFAULT_REGION: "us-east-2",
+        IDEA_BROKER_DISCOVERY_ADDRESSES: "broker.example.invalid:47500", IDEA_COGNITO_PROVIDER_URL: "https://example.invalid",
+        IDEA_BROKER_CONF_FILE: join(work, "broker.properties"), IDEA_BROKER_LOGBACK_FILE: join(work, "absent.xml"),
+        IDEA_BROKER_REGISTER_INTERVAL: "0.01", IDEA_BROKER_REGISTER_RETRY_INTERVAL: "0.01" },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(count, "utf8").trim(), "62");
+    assert.match(result.stdout, /retrying every minute/);
+    assert.match(result.stdout, /registered https:\/\/example\.invalid as the authorization server/);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});

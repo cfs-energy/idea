@@ -19,3 +19,8 @@ export const AUTH_PASSWORD_RESET_REQUIRED = 'AUTH_PASSWORD_RESET_REQUIRED'
 export const SERVER_ERROR = 'SERVER_ERROR'
 export const NETWORK_ERROR = 'NETWORK_ERROR'
 export const REQUEST_TIMEOUT = 'REQUEST_TIMEOUT'
+
+// what a person reads when a request fails below the API: same words wherever it surfaces
+export const SERVER_ERROR_MESSAGE = 'The portal had a problem. Try again in a minute.'
+export const NETWORK_ERROR_MESSAGE = 'The portal could not be reached. Check your connection and try again.'
+export const REQUEST_TIMEOUT_MESSAGE = 'The portal took too long to respond. Try again.'

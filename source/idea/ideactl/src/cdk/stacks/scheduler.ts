@@ -10,6 +10,7 @@
  * before this stack has written them.
  */
 
+import { checkSiteHookSettings, HOST_SITE_HOOK_KEYS } from '../site-hook.ts';
 import { Aws, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -51,7 +52,7 @@ import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
   ExistingSocaCluster
 } from '../constructs/existing-resources.ts';
-import { ComputeNodeSecurityGroup, SchedulerSecurityGroup } from '../constructs/network.ts';
+import { admitToOpenSearch, ComputeNodeSecurityGroup, SchedulerSecurityGroup } from '../constructs/network.ts';
 
 const MODULE_SCHEDULER = 'scheduler';
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
@@ -87,6 +88,8 @@ export class SchedulerStack extends IdeaBaseStack {
   computeNodeInstanceProfile!: InstanceProfile;
   spotFleetRequestRole!: Role;
   schedulerSecurityGroup!: SchedulerSecurityGroup;
+  /** The rule that admits this service to OpenSearch, when the cluster has analytics. */
+  openSearchIngress: ec2.CfnSecurityGroupIngress | undefined;
   computeNodeSecurityGroup!: ComputeNodeSecurityGroup;
   jobStatusSqsQueue!: SQSQueue;
   externalEndpoint!: CustomResource;
@@ -116,6 +119,8 @@ export class SchedulerStack extends IdeaBaseStack {
 
     this.userPool = this.lookupUserPool();
 
+    // the host hooks' checksums are read by the compute node and bake bootstraps; refuse a bad one here
+    checkSiteHookSettings(this.context.config, this.stack, HOST_SITE_HOOK_KEYS.scheduler);
     this.buildOauth2Client();
     this.buildAccessControlGroups(this.userPool);
     this.buildSqsQueue();
@@ -313,6 +318,7 @@ export class SchedulerStack extends IdeaBaseStack {
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
     this.removeBastionHostIngressRule(this.schedulerSecurityGroup);
+    this.openSearchIngress = admitToOpenSearch(this.context, this.stack, this.schedulerSecurityGroup, 'the scheduler');
 
     this.computeNodeSecurityGroup = new ComputeNodeSecurityGroup(
       this.context,
@@ -448,7 +454,9 @@ export class SchedulerStack extends IdeaBaseStack {
       healthCheck: {
         command: [
           'CMD-SHELL',
-          'qstat -B && curl --fail --silent --show-error --unix-socket /run/idea.sock --max-time 4 --header \'Content-Type: application/json\' --data \'{"header":{"namespace":"Scheduler.ListActiveJobs"}}\' http://localhost/scheduler/api/v1',
+          // the batch server, the job scheduler (nothing else watches pbs_sched), and an API answer
+          // that reports success: an application error comes back as HTTP 200
+          'qstat -B && pgrep -x pbs_sched >/dev/null && curl --fail --silent --show-error --unix-socket /run/idea.sock --max-time 4 --header \'Content-Type: application/json\' --data \'{"header":{"namespace":"Scheduler.ListActiveJobs"}}\' http://localhost/scheduler/api/v1 | grep -Eq \'"success": *true\'',
         ],
         interval: Duration.seconds(5),
         timeout: Duration.seconds(5),
@@ -465,7 +473,7 @@ export class SchedulerStack extends IdeaBaseStack {
     });
     container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
     this.addSchedulerStorage(taskDefinition, container, taskRole);
-    addStorageMounts(scope, taskDefinition, container);
+    addStorageMounts(scope, taskDefinition, container, "scheduler");
     attachApplicationFileLogs(scope, { idPrefix: 'scheduler', logGroupName, taskDefinition, container });
     addLogTailContainer(scope, taskDefinition, {
       containerId: 'scheduler-openpbs-logs',
@@ -541,6 +549,12 @@ export class SchedulerStack extends IdeaBaseStack {
       vpcSubnets: { subnets: this.cluster.privateSubnets },
     });
     fileSystem.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    // shortcut: the access point presents every caller as uid 0, so PostgreSQL's datastore is root's.
+    // 26.11.2 makes the scheduler role chown it to postgres before PBS starts (roles/scheduler.sh).
+    // Next release: delete posixUser, once every cluster has run that repair; never in the same
+    // deploy as the repair. It replaces the access point (same logical id, new id, the old one is
+    // retained). Precondition, read-only, in the running scheduler task:
+    //   find /var/spool/pbs/datastore ! -user postgres | wc -l   # must print 0
     const accessPoint = fileSystem.addAccessPoint('scheduler-pbs-access-point', {
       createAcl: { ownerGid: '0', ownerUid: '0', permissions: '0700' },
       path: '/pbs',
@@ -672,6 +686,9 @@ export class SchedulerStack extends IdeaBaseStack {
 
   buildClusterSettings(): void {
     const clusterSettings: Record<string, unknown> = {
+      // The service's own OpenSearch rule, written once the rule exists: an analytics upgrade that
+      // drops the VPC-wide rule checks for it (deployment-helper refuseAnalyticsAheadOfServices).
+      ...(this.openSearchIngress === undefined ? {} : { opensearch_ingress_rule: this.openSearchIngress.ref }),
       deployment_id: this.deploymentId,
       private_dns_name: this.schedulerHostname,
     };

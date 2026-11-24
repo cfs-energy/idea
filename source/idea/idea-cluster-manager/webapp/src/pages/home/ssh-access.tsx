@@ -13,10 +13,10 @@
 
 import React, {Component} from "react";
 
-import {Badge, Box, Button, Container, CopyToClipboard, ExpandableSection, Header, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
+import {Alert, Badge, Box, Button, Container, CopyToClipboard, ExpandableSection, Header, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {AppContext} from "../../common";
-import Utils from "../../common/utils";
+import {bastionHost, describeKeyFailure} from "./bastion-host";
 import {Constants} from "../../common/constants";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -29,6 +29,8 @@ export interface SSHAccessState {
     downloadPpkLoading: boolean
     downloadPemLoading: boolean
     sshHostIp: string
+    hostError: string | null
+    keyError: string | null
 }
 
 class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
@@ -37,22 +39,26 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
         this.state = {
             downloadPpkLoading: false,
             downloadPemLoading: false,
-            sshHostIp: ''
+            sshHostIp: '',
+            hostError: null,
+            keyError: null
         }
     }
 
     componentDidMount() {
+        this.loadHost()
+    }
+
+    loadHost() {
+        this.setState({hostError: null})
         AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_BASTION_HOST).then(moduleInfo => {
-            let sshHostIp: string
-            if (Utils.isNotEmpty(moduleInfo.ssh_hostname)) {
-                sshHostIp = Utils.asString(moduleInfo.ssh_hostname)
-            } else if (Utils.asBoolean(moduleInfo.public)) {
-                sshHostIp = Utils.asString(moduleInfo.public_ip)
-            } else {
-                sshHostIp = Utils.asString(moduleInfo.private_ip || moduleInfo.private_dns_name)
-            }
+            const host = bastionHost(moduleInfo)
+            this.setState({sshHostIp: host, hostError: host ? null : 'Could not load the connection details.'})
+        }).catch(error => {
             this.setState({
-                sshHostIp: sshHostIp
+                hostError: error?.errorCode === 'MODULE_NOT_FOUND'
+                    ? "SSH access isn't set up on this cluster."
+                    : 'Could not load the connection details.'
             })
         })
     }
@@ -65,7 +71,10 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
             state.downloadPpkLoading = true
         }
         this.setState(state, () => {
-            AppContext.get().auth().downloadPrivateKey(keyFormat).finally(() => {
+            this.setState({keyError: null})
+            AppContext.get().auth().downloadPrivateKey(keyFormat).catch(error => {
+                this.setState({keyError: describeKeyFailure(error)})
+            }).finally(() => {
                 const state: any = {}
                 if (keyFormat === 'pem') {
                     state.downloadPemLoading = false
@@ -93,6 +102,11 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
             '  ServerAliveCountMax 2',
             `  IdentityFile ${pem}`
         ].join('\n')
+        if (!host) {
+            return this.renderLayout(this.state.hostError
+                ? <Alert type="error" action={<Button onClick={() => this.loadHost()}>Retry</Button>}>{this.state.hostError}</Alert>
+                : <Box>Loading connection details...</Box>)
+        }
         const command = (text: string) => (
             <CopyToClipboard
                 variant="inline"
@@ -117,32 +131,9 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
             </Box>
         )
 
-        return (
-            <IdeaAppLayout
-                ideaPageId={this.props.ideaPageId}
-                toolsOpen={this.props.toolsOpen}
-                tools={this.props.tools}
-                onToolsChange={this.props.onToolsChange}
-                onPageChange={this.props.onPageChange}
-                sideNavHeader={this.props.sideNavHeader}
-                sideNavItems={this.props.sideNavItems}
-                onSideNavChange={this.props.onSideNavChange}
-                onFlashbarChange={this.props.onFlashbarChange}
-                flashbarItems={this.props.flashbarItems}
-                breadcrumbItems={[
-                    {
-                        text: 'IDEA',
-                        href: '#'
-                    },
-                    {
-                        text: 'SSH access',
-                        href: ''
-                    }
-                ]}
-                header={<Header variant={"h1"}>SSH access</Header>}
-                contentType={"default"}
-                content={
-                    <SpaceBetween size="l">
+        return this.renderLayout(
+            <SpaceBetween size="l">
+                {this.state.keyError && <Alert type="error" dismissible={true} onDismiss={() => this.setState({keyError: null})}>{this.state.keyError}</Alert>}
                         <Container header={<Header variant="h2" description="Linux, macOS and Windows 10 or later, using the built-in ssh command.">Connect from a terminal</Header>}>
                             <SpaceBetween size="l">
                                 {step('1. Download your private key', (
@@ -204,6 +195,7 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
                                                         </Link>
                                                     </li>
                                                     <li>Host name: <code>{host}</code></li>
+                                                    <li>When asked "login as", enter <code>{username}</code></li>
                                                     <li>
                                                         Under Connection, SSH, Auth, set the private key file
                                                         to <code>{keyName('ppk')}</code>
@@ -242,8 +234,36 @@ class SSHAccess extends Component<SSHAccessProps, SSHAccessState> {
                                 {step('2. Connect from the bastion host', command('ssh <node host name>'))}
                             </SpaceBetween>
                         </Container>
-                    </SpaceBetween>
-                }/>
+            </SpaceBetween>
+        )
+    }
+
+    renderLayout(content: React.ReactNode) {
+        return (
+            <IdeaAppLayout
+                ideaPageId={this.props.ideaPageId}
+                toolsOpen={this.props.toolsOpen}
+                tools={this.props.tools}
+                onToolsChange={this.props.onToolsChange}
+                onPageChange={this.props.onPageChange}
+                sideNavHeader={this.props.sideNavHeader}
+                sideNavItems={this.props.sideNavItems}
+                onSideNavChange={this.props.onSideNavChange}
+                onFlashbarChange={this.props.onFlashbarChange}
+                flashbarItems={this.props.flashbarItems}
+                breadcrumbItems={[
+                    {
+                        text: 'IDEA',
+                        href: '#'
+                    },
+                    {
+                        text: 'SSH access',
+                        href: ''
+                    }
+                ]}
+                header={<Header variant={"h1"}>SSH access</Header>}
+                contentType={"default"}
+                content={content}/>
         )
     }
 }

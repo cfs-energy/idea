@@ -37,6 +37,8 @@ export interface IdeaFormProps {
     groups?: ReadonlyArray<SocaUserInputGroupMetadata>
     primaryCtaTitle?: string
     secondaryCtaTitle?: string
+    // shown beside the primary button while a slow submit is out
+    submittingText?: string
     onSubmit?: IdeaFormOnSubmit
     onCancel?: IdeaFormOnCancel
     values?: any
@@ -71,7 +73,7 @@ export interface IdeaFormOnCancelEvent {
     form: IdeaForm
 }
 
-export type IdeaFormOnSubmit = (event: IdeaFormOnSubmitEvent) => Promise<boolean> | void;
+export type IdeaFormOnSubmit = (event: IdeaFormOnSubmitEvent) => Promise<unknown> | void;
 export type IdeaFormOnCancel = (event: IdeaFormOnCancelEvent) => void;
 
 class IdeaForm extends Component<IdeaFormProps, IdeaFormState> {
@@ -257,6 +259,10 @@ class IdeaForm extends Component<IdeaFormProps, IdeaFormState> {
     }
 
     handleOnSubmit() {
+        // Enter in a field arrives here too, past the button's loading state
+        if (this.state.submitInProgress) {
+            return
+        }
         if (this.props.onSubmit) {
             const result = this.props.onSubmit({
                 form: this
@@ -303,6 +309,7 @@ class IdeaForm extends Component<IdeaFormProps, IdeaFormState> {
                 }}>
                     {getSecondaryCtaTitle()}
                 </Button>}
+                {this.state.submitInProgress && this.props.submittingText && <Box variant="p" padding={{top: 'xxs'}}>{this.props.submittingText}</Box>}
                 <Button loading={this.state.submitInProgress} variant="primary" onClick={() => {
                     this.handleOnSubmit()
                 }}>{getPrimaryCtaTitle()}</Button>

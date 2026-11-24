@@ -82,7 +82,7 @@ class SettingDefinition(SocaPayload):
     advanced: bool
     read_only: bool = False
     hidden: bool = False
-    effect: Literal['runtime', 'restart', 'deployment']
+    effect: Literal['runtime', 'restart', 'deployment', 'bootstrap']
 
 
 class DescribeSettingsCatalogRequest(SocaPayload):

@@ -103,6 +103,8 @@ class DesktopActivity:
         )
         if response is None:
             raise ValueError('Desktop sessions unavailable')
+        if response.get('timed_out') or (response.get('_shards') or {}).get('failed'):
+            raise ValueError('Incomplete desktop sessions read')
         hits = list((response.get('hits') or {}).get('hits') or [])
         hits += costs._history_hits(None, start_ms, end_ms, all_users=True)
         return costs._newest_per_session(hits)

@@ -14,11 +14,16 @@ QSTAT_ERROR_CODE_JOB_FINISHED = 35
 QSTAT_ERROR_CODE_UNKNOWN_JOB_ID = 153
 QSTAT_ERROR_CODE_UNKNOWN_QUEUE = 170
 
+# a finished job's history substate: 91 qdel ended it, 92 it finished, 93 it failed
+JOB_SUBSTATE_TERMINATED = 91
+
 QALTER_ERROR_CODE_JOB_IS_RUNNING = 167
 
 QMGR_ERROR_CODE_OBJECT_BUSY = 179
 
 QSTAT = '/opt/pbs/bin/qstat'
+QSELECT = '/opt/pbs/bin/qselect'
+PRINTJOB = '/opt/pbs/bin/printjob'
 QMGR = '/opt/pbs/bin/qmgr'
 PBSNODES = '/opt/pbs/bin/pbsnodes'
 QALTER = '/opt/pbs/bin/qalter'

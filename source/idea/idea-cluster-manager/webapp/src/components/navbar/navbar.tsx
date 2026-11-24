@@ -52,6 +52,8 @@ export interface IdeaNavbarLogo {
     img?: React.ReactNode
 }
 
+const TICKER_PERIOD_WORDS: Record<string, string> = {MTD: 'this month', WTD: 'this week', QTD: 'this quarter', YTD: 'this year'}
+
 class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
 
     preferencesForm: RefObject<IdeaForm | null>
@@ -307,12 +309,20 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                             ariaLabel: 'Open a shell on the bastion',
                             onClick: () => shellStore.open('bastion', 'Bastion')
                         }] : []),
+                        // a menu that just loses Shell gives no clue why, or that trying again may work
+                        ...(shellStore.get().targetsFailed && hasAccess(AppContext.get(), 'cluster') ? [{
+                            type: 'button' as const,
+                            text: 'Shell unavailable',
+                            iconName: 'command-prompt' as const,
+                            ariaLabel: 'Terminal access could not be checked. Select to try again.',
+                            onClick: () => void shellStore.loadTargets(AppContext.get().client().terminal(), true)
+                        }] : []),
                         ...(showTicker ? [{
                             type: 'button' as const,
-                            text: `${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency}).format(ticker.total!)} · ${ticker.period}`,
+                            // the plus marks a floor; the label says why
+                            text: `${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency, ...(ticker.total! >= 1000 ? {maximumFractionDigits: 0} : {})}).format(ticker.total!)}${ticker.incomplete === true ? '+' : ''} ${TICKER_PERIOD_WORDS[ticker.period!] ?? ticker.period}`,
                             href: '#/home/my-costs',
-                            iconName: ticker.incomplete !== false ? 'status-info' as const : undefined,
-                            ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some costs are still estimates' : ''}. ${computeRateNote(AppContext.get().getClusterSettingsService().getComputeRate())} Open My costs`
+                                                        ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some days are not fully counted yet' : ''}. ${computeRateNote(AppContext.get().getClusterSettingsService().getComputeRate())} Open My costs`
                         }] : []),
                         {
                             type: "menu-dropdown",

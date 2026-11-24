@@ -57,7 +57,8 @@ class VirtualDesktopInstanceTypesChart extends VirtualDesktopBaseChart<VirtualDe
                         "aggs": {
                             "instance_type": {
                                 "terms": {
-                                    "field": "server.instance_type.raw"
+                                    "field": "server.instance_type.raw",
+                                    "size": 100
                                 }
                             }
                         }

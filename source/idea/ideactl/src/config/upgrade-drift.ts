@@ -36,6 +36,21 @@ export function isOperatorSource(source: unknown): boolean {
   return source === "api" || source === "cli";
 }
 
+/**
+ * A row of another module set the cluster has, for a module this release still generates: the
+ * template writes only `module_sets.default`, so without this every other set's mapping would read
+ * as obsolete. A row for a module the release no longer has stays obsolete in every set.
+ */
+export function isLiveModuleSetRow(key: string, generated: { has(key: string): boolean }): boolean {
+  const match = /^global-settings\.module_sets\.([^.]+)\.([^.]+)\.(.+)$/.exec(key);
+  return match !== null && generated.has(`global-settings.module_sets.default.${match[2]}.${match[3]}`);
+}
+
+/** Keys whose Phase 3 write moves a row from an old template default to the new one. */
+export function isTemplateDefaultKey(key: string): boolean {
+  return key.endsWith(".metrics.cost.interval_hours") || key.endsWith(".metrics.cost.lookback_days") || key.startsWith("global-settings.package_config.dcv.");
+}
+
 /** One current table row, including the metadata the preview is allowed to print. */
 export interface CurrentConfigRow extends ConfigEntry {
   source?: string;
@@ -251,6 +266,10 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
       const generatedRow = generated.get(key);
       if (currentRow === undefined && generatedRow !== undefined) {
         findings.set(key, finding("ADD", "ADD", key, undefined, generatedRow, generatedRow, true));
+      } else if (currentRow !== undefined && generatedRow === undefined && (isOperatorSource(currentRow.source) || isLiveModuleSetRow(key, generated))) {
+        // the post-upgrade cleanup keeps an operator's row the template does not generate, and the
+        // rows of the cluster's other module sets
+        findings.set(key, finding("ORPHAN_PRESERVED", "PRESERVE", key, currentRow, undefined, undefined, true));
       } else if (currentRow !== undefined && generatedRow === undefined) {
         findings.set(
           key,
@@ -325,11 +344,12 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
           true,
         ),
         // Only the release repository planner adds an image write to Phase 3. The cost interval
-        // planner writes only a row still holding the old template default that no operator set,
-        // and the DCV pin planner only a pair still holding the exact old template default.
+        // and lookback planners write only a row still holding the old template default that no
+        // operator set, and the DCV pin planner only a pair still holding the exact old template
+        // default.
         routineUpdate: key === "ecs.image" || key === "ecs.release_image" || key === "ecs.previous_release_image"
           ? "release image"
-          : key.endsWith(".metrics.cost.interval_hours") || key.startsWith("global-settings.package_config.dcv.")
+          : isTemplateDefaultKey(key)
             ? "template default"
             : undefined,
       },

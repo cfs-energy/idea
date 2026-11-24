@@ -7,7 +7,7 @@ import { fakeDeps, moduleRow, withTempIdeaHome } from "./deploy-harness.ts";
 
 export function fakeContainerHosts() {
   const calls: string[] = [];
-  const state = { old: true, joined: false, reads: 0, joinAfter: 2, status: "Successful" };
+  const state = { old: true, joined: false, reads: 0, joinAfter: 2, status: "Successful", mountLines: [] as string[] | undefined };
   const api = {
     async hostGroup() { calls.push("group"); return { name: "hosts", minSize: 1, desiredCapacity: 1, instanceIds: ["i-host"] }; },
     async launchTemplateVersions() { calls.push("versions"); return { current: { id: "lt-host", version: "2" }, instances: [{ instanceId: "i-host", id: "lt-host", version: state.old ? "1" : "2" }] }; },
@@ -17,6 +17,7 @@ export function fakeContainerHosts() {
       return [{ arn: "arn:host", instanceId: "i-host", status: "ACTIVE", runningTasks: 0,
         attributes: state.joined || state.reads >= state.joinAfter ? { "idea.directory": "joined" } : {} as Record<string, string> }];
     },
+    async launchTemplateMountLines() { calls.push("mounts"); return state.mountLines; },
     async startInstanceRefresh(input: unknown) { calls.push(`refresh:${JSON.stringify(input)}`); return "refresh-id"; },
     async describeInstanceRefresh() { calls.push("progress"); if (state.status === "Successful") state.old = false; return { status: state.status, percentageComplete: 100 }; },
     async drain() {}, async activate() {}, async waitUntilEmpty() { return true; }, async release() {},

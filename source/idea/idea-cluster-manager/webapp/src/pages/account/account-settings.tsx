@@ -15,7 +15,7 @@ import ApiTokens from './api-tokens'
 import React, {Component, RefObject} from "react";
 
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import {Box, Button, ButtonDropdown, ColumnLayout, Container, FormField, Header, Select, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
+import {Alert, Box, Button, ButtonDropdown, ColumnLayout, Container, FormField, Header, Select, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
 import {TableProps} from "@cloudscape-design/components/table";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {CopyToClipBoard, ProjectBedrockModels} from "../../components/common";
@@ -36,7 +36,9 @@ export interface AccountSettingsProps extends IdeaAppLayoutProps, IdeaSideNaviga
 
 export interface AccountSettingsState {
     user: User | null
+    userError: boolean
     usersInGroup: User[] | null
+    usersInGroupError: boolean
     projects: Project[] | null
     projectsError: string | null
     bedrockEnabled: boolean
@@ -81,6 +83,8 @@ const LANDING_OPTIONS = [
     {label: 'Reports', value: 'reports'}
 ]
 
+const landingOptions = () => LANDING_OPTIONS.filter(option => option.value !== 'reports' || AppContext.get().getClusterSettingsService().isCustomDashboardEnabled());
+
 // shown only when bedrock.enabled. Renders the project model list with the same
 // component as the script workbench.
 const MY_PROJECTS_BEDROCK_COLUMN_DEFINITION: TableProps.ColumnDefinition<Project> = {
@@ -103,7 +107,9 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
         this.removeUserFromGroupForm = React.createRef()
         this.state = {
             user: null,
+            userError: false,
             usersInGroup: null,
+            usersInGroupError: false,
             projects: null,
             projectsError: null,
             bedrockEnabled: false,
@@ -112,9 +118,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
     }
 
     componentDidMount() {
-        this.fetchUser().then(() => {
-            this.fetchUsersInGroup().finally()
-        })
+        this.loadProfile()
         this.fetchProjects().finally()
         AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_CLUSTER_MANAGER).then(settings => {
             this.setState({
@@ -122,6 +126,15 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
             })
         }).catch(error => {
             console.error(error)
+        })
+    }
+
+    loadProfile() {
+        this.setState({userError: false})
+        this.fetchUser().then(() => {
+            this.fetchUsersInGroup().finally()
+        }).catch(() => {
+            this.setState({userError: true})
         })
     }
 
@@ -232,12 +245,14 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                 cursor = response.paginator?.cursor
             } catch (error) {
                 console.error('Error fetching users in group:', error)
-                break
+                this.setState({usersInGroupError: true})
+                return false
             }
         } while (cursor) // Continue while there are more pages
 
         this.setState({
-            usersInGroup: allUsers
+            usersInGroup: allUsers,
+            usersInGroupError: false
         })
         return true
     }
@@ -246,7 +261,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
         return <IdeaForm
             ref={this.addUserToGroupForm}
             name="add-user-to-group"
-            title="Add Users to your Group"
+            title="Add people to your group"
             modal={true}
             modalSize="medium"
             onSubmit={() => {
@@ -268,7 +283,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                 {
                     name: 'usernames',
                     title: 'Username',
-                    description: 'Enter the usernames of the user you want to add to your group',
+                    description: 'Enter the usernames to add to your group',
                     multiple: true,
                     validate: {
                         required: true
@@ -281,7 +296,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
         return <IdeaForm
             ref={this.removeUserFromGroupForm}
             name="remove-user-from-group"
-            title="Remove Users from your Group"
+            title="Remove people from your group"
             modal={true}
             modalSize="medium"
             onSubmit={() => {
@@ -303,7 +318,7 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                 {
                     name: 'usernames',
                     title: 'Username',
-                    description: 'Enter the usernames of the user you want to remove from your group',
+                    description: 'Enter the usernames to remove from your group',
                     multiple: true,
                     validate: {
                         required: true
@@ -385,8 +400,11 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
         const getUsersInGroup = () => {
             const result: string[] = []
             if (this.state.usersInGroup) {
+                const me = this.state.user?.username
                 this.state.usersInGroup.forEach(user => {
-                    result.push(user.username!)
+                    if (user.username !== me) {
+                        result.push(user.username!)
+                    }
                 })
             }
             return result
@@ -430,16 +448,17 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                     items={[
                                         {
                                             id: 'add-user-to-group',
-                                            text: 'Add User to my Group'
+                                            text: 'Add someone to my group'
                                         },
                                         {
                                             id: 'remove-user-from-group',
-                                            text: 'Remove User from my Group'
+                                            text: 'Remove someone from my group'
                                         }
                                     ]}>Actions</ButtonDropdown>
-                                <Button variant="primary" onClick={() => {
+                                {/* with single sign-on the password belongs to the identity provider */}
+                                {!Utils.isSsoEnabled() && <Button variant="primary" onClick={() => {
                                     this.getChangePasswordForm().showModal()
-                                }}>Change Password</Button>
+                                }}>Change Password</Button>}
                             </SpaceBetween>
                         }
                     > My account</Header>}
@@ -456,31 +475,33 @@ class AccountSettings extends Component<AccountSettingsProps, AccountSettingsSta
                                         {
                                             id: 'profile',
                                             label: 'My Profile',
-                                            content: (
+                                            content: this.state.userError ? (
+                                                <Alert type="error" action={<Button onClick={() => this.loadProfile()}>Retry</Button>}>Could not load your profile.</Alert>
+                                            ) : (
                                                 this.state.user &&
                                                 <ColumnLayout columns={2}>
                                                     <KeyValueGroup title="My Profile">
                                                         <KeyValue title="Username" value={this.state.user?.username}/>
                                                         <KeyValue title="Email" value={this.state.user?.email}/>
                                                         <KeyValue title="Home Directory" value={this.state.user?.home_dir}/>
-                                                        <KeyValue title="Login Shell" value={this.state.user?.login_shell}/>
-                                                        <KeyValue title="Is Administrator?" value={this.state.user?.sudo} type="boolean"/>
+                                                        <KeyValue title="Shell" value={this.state.user?.login_shell}/>
+                                                        <KeyValue title="Administrator" value={this.state.user?.sudo} type="boolean"/>
                                                         <KeyValue title="Created On" value={new Date(this.state.user?.created_on!).toLocaleString()}/>
                                                         {isPasswordRotationApplicable() && <KeyValue title="Password Expires In" value={getPasswordExpiresIn()}/>}
                                                     </KeyValueGroup>
                                                     <FormField label="Landing page" description="Choose where the portal opens after sign-in.">
                                                         <Select
-                                                            selectedOption={LANDING_OPTIONS.find(option => option.value === (this.state.user?.landing_page === 'home' ? 'my-costs' : this.state.user?.landing_page || '')) ?? LANDING_OPTIONS[0]}
+                                                            selectedOption={landingOptions().find(option => option.value === (this.state.user?.landing_page === 'home' ? 'my-costs' : this.state.user?.landing_page || '')) ?? LANDING_OPTIONS[0]}
                                                             onChange={event => this.updateLandingPage(event.detail.selectedOption.value ?? '')}
-                                                            options={LANDING_OPTIONS}
+                                                            options={landingOptions()}
                                                             disabled={this.state.savingLandingPage}
                                                         />
                                                     </FormField>
-                                                    <KeyValueGroup title="LDAP Info">
-                                                        <KeyValue title="UID" value={this.state.user?.uid}/>
-                                                        <KeyValue title="GID" value={this.state.user?.gid}/>
-                                                        <KeyValue title="Group Name" value={this.state.user.group_name}/>
-                                                        <KeyValue title="Additional users in my group" value={getUsersInGroup()}/>
+                                                    <KeyValueGroup title="Linux account">
+                                                        <KeyValue title="User ID" value={this.state.user?.uid}/>
+                                                        <KeyValue title="Group ID" value={this.state.user?.gid}/>
+                                                        <KeyValue title="Group" value={this.state.user.group_name}/>
+                                                        <KeyValue title="Other people in my group" value={this.state.usersInGroupError ? 'Could not load group members.' : getUsersInGroup()}/>
                                                     </KeyValueGroup>
                                                 </ColumnLayout>
                                             )

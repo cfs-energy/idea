@@ -8,11 +8,15 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from typing import Dict, Callable
+from botocore.exceptions import ClientError
+import re
+from typing import Callable, Dict, Optional
 
 import ideavirtualdesktopcontroller
+from ideadatamodel import constants
 from ideadatamodel import (
     GetUserRequest,
+    VirtualDesktopSessionState,
     GetProjectRequest,
     CreateSessionRequest,
     CreateSessionResponse,
@@ -57,6 +61,10 @@ from ideadatamodel import (
     ResumeSessionsResponse,
     ListSessionsRequest,
     CreateSoftwareStackRequest,
+    ExtendSoftwareStackRequest,
+    ExtendSoftwareStackResponse,
+    ListOrphanInstancesRequest,
+    ListOrphanInstancesResponse,
     CreateSoftwareStackResponse,
     UpdateSoftwareStackRequest,
     UpdateSoftwareStackResponse,
@@ -82,13 +90,21 @@ from ideadatamodel import (
 from ideadatamodel import errorcodes, exceptions
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
-from datetime import datetime
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import (
+    MAX_EXTEND_DAYS,
+    OrphanInstances,
+    StackExpiry,
+)
+from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import (
+    SESSION_CHANGED_MESSAGE,
+    VirtualDesktopAPI,
+)
+from datetime import datetime, timedelta
 from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     BASE_STACK_MIN_STORAGE_GB,
 )
 
-# the monthly vendor check; the scheduler reads the same key for compute rows
+# the monthly rebuild; the scheduler reads the same key for compute rows
 IMAGE_REFRESH_SCHEDULE_KEY = (
     'virtual-desktop-controller.software_stacks.image_refresh_schedule'
 )
@@ -97,6 +113,8 @@ IMAGE_REFRESH_LAST_RUN_KEY = (
     'virtual-desktop-controller.software_stacks.image_refresh_last_run_on'
 )
 
+
+STACK_OWNER_PATTERN = re.compile(r'[A-Za-z0-9._@-]{0,128}')
 
 # app (client-credentials) tokens are authorized by module scope, users by elevation:
 # reads take <module>/read, mutations <module>/write. a namespace absent from this map
@@ -126,6 +144,26 @@ APP_TOKEN_NAMESPACE_ACCESS: Dict[str, str] = {
 }
 
 
+# an update naming only these changes the stack's status alone
+STATUS_ONLY_STACK_FIELDS = {'stack_id', 'base_os', 'enabled'}
+
+
+# the identity tags written only at launch, which no project tag may replace
+MOVE_RESERVED_TAG_KEYS = {
+    constants.IDEA_TAG_CLUSTER_NAME,
+    constants.IDEA_TAG_NODE_TYPE,
+    constants.IDEA_TAG_MODULE_ID,
+    constants.IDEA_TAG_BACKUP_PLAN,
+}
+# the step a move stopped at, as its administrator reads it
+MOVE_STEP_NAMES = {
+    'row': "Writing the desktop's new project",
+    'profile': "Changing the desktop's instance role",
+    'instance tags': "Tagging the desktop's host",
+    'volume tags': "Tagging the desktop's volumes",
+}
+
+
 class VirtualDesktopAdminAPI(VirtualDesktopAPI):
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context)
@@ -136,6 +174,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.BatchCreateSessions': self.batch_create_sessions,
             'VirtualDesktopAdmin.UpdateSession': self.update_session,
             'VirtualDesktopAdmin.SetSessionCleanupExemption': self.set_session_cleanup_exemption,
+            'VirtualDesktopAdmin.MoveSessionToProject': self.move_session_to_project,
             'VirtualDesktopAdmin.DeleteSessions': self.delete_sessions,
             'VirtualDesktopAdmin.GetSessionInfo': self.get_session_info,
             'VirtualDesktopAdmin.ListSessions': self.list_sessions,
@@ -149,6 +188,8 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.DeleteSoftwareStack': self.delete_software_stack,
             'VirtualDesktopAdmin.GetSoftwareStackInfo': self.get_software_stack_info,
             'VirtualDesktopAdmin.ListSoftwareStacks': self.list_software_stacks,
+            'VirtualDesktopAdmin.ExtendSoftwareStack': self.extend_software_stack,
+            'VirtualDesktopAdmin.ListOrphanInstances': self.list_orphan_instances,
             'VirtualDesktopAdmin.CreateSoftwareStackFromSession': self.create_software_stack_from_session,
             'VirtualDesktopAdmin.CreatePermissionProfile': self.create_permission_profile,
             'VirtualDesktopAdmin.UpdatePermissionProfile': self.update_permission_profile,
@@ -188,7 +229,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         return self.validate_delete_session_request(session)
 
     def _validate_create_session_request(
-        self, session: VirtualDesktopSession
+        self, session: VirtualDesktopSession, custom_instance_type: bool = False
     ) -> tuple[VirtualDesktopSession, bool]:
         # Validate Session Object
         if Utils.is_empty(session):
@@ -201,13 +242,8 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         # check for api-call
 
         # Shortcut 'clusteradmin' to avoid lockout scenarios
-        cluster_administrator = self.context.config().get_string(
-            'cluster.administrator_username', required=True
-        )
-        if session.owner in cluster_administrator or session.owner.startswith(
-            'clusteradmin'
-        ):
-            return self.validate_create_session_request(session)
+        if self.is_cluster_administrator_username(session.owner):
+            return self.validate_create_session_request(session, custom_instance_type)
 
         response = self.context.accounts_client.get_user(
             GetUserRequest(username=session.owner)
@@ -224,7 +260,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             session.failure_reason = f'User {session.owner} does not belong to any of the groups: {self.VDI_GROUPS}'
             return session, False
 
-        return self.validate_create_session_request(session)
+        return self.validate_create_session_request(session, custom_instance_type)
 
     @staticmethod
     def _validate_update_software_stack_request(
@@ -356,195 +392,20 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             request.admin_custom_instance_type, default=False
         )
 
-        # If admin is using a custom instance type, we'll do special validation
-        if admin_custom_instance_type:
-            # Perform basic validation but skip instance type validation
-            if Utils.is_empty(session):
-                session = VirtualDesktopSession()
-                session.failure_reason = 'Missing Create Session Info'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Still validate the user belongs to the allowed group
-            cluster_administrator = self.context.config().get_string(
-                'cluster.administrator_username', required=True
-            )
-            if not (
-                session.owner in cluster_administrator
-                or session.owner.startswith('clusteradmin')
-            ):
-                response = self.context.accounts_client.get_user(
-                    GetUserRequest(username=session.owner)
-                )
-                users_groups = Utils.get_as_list(
-                    response.user.additional_groups, default=[]
-                )
-                is_user_part_of_group = False
-
-                for group in self.VDI_GROUPS:
-                    if group in users_groups:
-                        is_user_part_of_group = True
-                        break
-
-                if not is_user_part_of_group:
-                    session.failure_reason = f'User {session.owner} does not belong to any of the groups: {self.VDI_GROUPS}'
-                    context.fail(
-                        message=session.failure_reason,
-                        payload=CreateSessionResponse(session=session),
-                        error_code=errorcodes.INVALID_PARAMS,
-                    )
-                    return
-
-            # Validate project and ensure it's fully populated
-            if Utils.is_empty(session.project) or Utils.is_empty(
-                session.project.project_id
-            ):
-                session.failure_reason = 'missing session.project.project_id'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Populate the project with full details from the database
-            project_response = self.context.projects_client.get_project(
-                GetProjectRequest(project_id=session.project.project_id)
-            )
-
-            if Utils.is_empty(project_response) or Utils.is_empty(
-                project_response.project
-            ):
-                session.failure_reason = (
-                    f'Invalid project: {session.project.project_id}'
-                )
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Update session with full project details
-            session.project = project_response.project
-
-            # Validate software stack
-            if Utils.is_empty(session.software_stack):
-                session.failure_reason = 'missing session.software_stack'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Missing information in Software Stack
-            if Utils.is_empty(session.software_stack.stack_id) or Utils.is_empty(
-                session.software_stack.base_os
-            ):
-                session.failure_reason = 'missing session.software_stack.stack_id and/or session.software_stack.base_os'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # a custom instance type is the only check this branch skips: an end-of-life
-            # base os is refused here the same as anywhere else.
-            failure_reason = self.validate_base_os(session.software_stack.base_os)
-            if Utils.is_not_empty(failure_reason):
-                session.failure_reason = failure_reason
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            software_stack = self.software_stack_db.get(
-                stack_id=session.software_stack.stack_id,
-                base_os=session.software_stack.base_os,
-            )
-            if Utils.is_empty(software_stack):
-                session.failure_reason = f'Invalid session.software_stack.stack_id: {session.software_stack.stack_id} and/or session.software_stack.base_os: {session.software_stack.base_os}'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Apply the software stack
-            session.software_stack = software_stack
-
-            # Validate software stack part of the same project
-            is_software_stack_part_of_project = False
-            for project in software_stack.projects:
-                if project.project_id == session.project.project_id:
-                    is_software_stack_part_of_project = True
-                    break
-
-            if not is_software_stack_part_of_project:
-                session.failure_reason = f'session.software_stack.stack_id: {session.software_stack.stack_id} is not part of session.project.project_id: {session.project.project_id}'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Validate root volume
-            if Utils.is_empty(session.server) or Utils.is_empty(
-                session.server.root_volume_size
-            ):
-                session.failure_reason = 'missing session.server.root_volume_size'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Check max root volume size
-            max_root_volume_size = self.context.config().get_int(
-                'virtual-desktop-controller.dcv_session.max_root_volume_memory',
-                required=True,
-            )
-            if session.server.root_volume_size > max_root_volume_size:
-                session.failure_reason = f'root volume size: {session.server.root_volume_size} is greater than maximum allowed root volume size: {max_root_volume_size}GB.'
-                context.fail(
-                    message=session.failure_reason,
-                    payload=CreateSessionResponse(session=session),
-                    error_code=errorcodes.INVALID_PARAMS,
-                )
-                return
-
-            # Validate hibernation
+        if admin_custom_instance_type and session is not None:
+            # the same checks as any create, except the stack's allowed sizes
             if Utils.is_empty(session.hibernation_enabled):
                 session.hibernation_enabled = False
-
-            # the admin cap on the per-session idle autostop delay applies here too
-            if Utils.is_not_empty(session.idle_autostop_delay):
-                failure_reason = self.validate_idle_autostop_delay(
-                    session.idle_autostop_delay
+            session, is_valid = self._validate_create_session_request(
+                session, custom_instance_type=True
+            )
+            if not is_valid:
+                context.fail(
+                    message=session.failure_reason,
+                    payload=CreateSessionResponse(session=session),
+                    error_code=errorcodes.INVALID_PARAMS,
                 )
-                if Utils.is_not_empty(failure_reason):
-                    session.failure_reason = failure_reason
-                    context.fail(
-                        message=session.failure_reason,
-                        payload=CreateSessionResponse(session=session),
-                        error_code=errorcodes.INVALID_PARAMS,
-                    )
-                    return
-                if session.idle_autostop_delay <= 0:
-                    session.idle_autostop_delay = None
-
-            # Complete the request and create the session
+                return
             session = self.complete_create_session_request(session, context)
             session.is_launched_by_admin = True
             session = self.session_utils.create_session(session)
@@ -594,6 +455,7 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
                 failed_sessions.append(session)
             else:
                 session = self.complete_create_session_request(session, context)
+                session.is_launched_by_admin = True
                 session = self.session_utils.create_session(session)
                 if Utils.is_empty(session.failure_reason):
                     valid_sessions.append(session)
@@ -735,14 +597,54 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             self.complete_resume_session_request(session, context)
             sessions_to_resume.append(session)
 
-        success_list, fail_list = self._resume_sessions(sessions_to_resume)
+        success_list, fail_list = self._resume_sessions(
+            sessions_to_resume, by_admin=True
+        )
         fail_list.extend(failed_sessions)
         context.success(ResumeSessionsResponse(success=success_list, failed=fail_list))
 
     def list_software_stacks(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListSoftwareStackRequest)
-        result = self._list_software_stacks(request)
+        result = self._annotate_software_stacks(self._list_software_stacks(request))
         context.success(result)
+
+    def extend_software_stack(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ExtendSoftwareStackRequest)
+        if Utils.is_any_empty(request.stack_id, request.base_os):
+            raise exceptions.invalid_params('stack_id and base_os are required')
+        if request.days is not None and not 1 <= request.days <= MAX_EXTEND_DAYS:
+            raise exceptions.invalid_params(
+                f'days must be between 1 and {MAX_EXTEND_DAYS}'
+            )
+        stack = self.software_stack_db.get(
+            stack_id=request.stack_id, base_os=request.base_os
+        )
+        if stack is None:
+            raise exceptions.invalid_params(f'no such stack: {request.stack_id}')
+        expiry = StackExpiry(self.context)
+        updated = self.software_stack_db.set_expiry(
+            stack, expiry.extended_date(stack, request.days)
+        )
+        expiry.annotate([updated])
+        context.success(ExtendSoftwareStackResponse(software_stack=updated))
+
+    def list_orphan_instances(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ListOrphanInstancesRequest)
+        # the model has already made this an int; a grace past a year is no grace period, and
+        # one past what a timedelta holds would fail as a server error
+        minutes = request.min_age_minutes
+        if minutes is not None and not 0 <= minutes <= 525600:
+            raise exceptions.invalid_params(
+                'min_age_minutes must be a whole number of minutes from 0 to 525600 (a year)'
+            )
+        finder = OrphanInstances(self.context, self.session_db)
+        context.success(
+            ListOrphanInstancesResponse(
+                listing=finder.list()
+                if minutes is None
+                else finder.list(min_age=timedelta(minutes=minutes))
+            )
+        )
 
     def list_sessions(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListSessionsRequest)
@@ -787,6 +689,10 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
     def update_session_permission(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(UpdateSessionPermissionRequest)
+        # a request may send any one of the three lists
+        request.create = request.create or []
+        request.update = request.update or []
+        request.delete = request.delete or []
         is_valid_request, request = self.validate_update_session_permission_request(
             request
         )
@@ -809,6 +715,15 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         new_software_stack = context.get_request_payload_as(
             UpdateSoftwareStackRequest
         ).software_stack
+        # a request naming only the stack and its status changes the status alone, so a
+        # toggle sent from an older listing cannot restore that listing's other fields
+        if (
+            new_software_stack is not None
+            and 'enabled' in new_software_stack.model_fields_set
+            and new_software_stack.model_fields_set <= STATUS_ONLY_STACK_FIELDS
+        ):
+            self._set_software_stack_status(context, new_software_stack)
+            return
         new_software_stack, is_valid = self._validate_update_software_stack_request(
             new_software_stack
         )
@@ -843,6 +758,18 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
         if Utils.is_not_empty(new_software_stack.description):
             old_software_stack.description = new_software_stack.description
+        # empty clears the owner; absent keeps it. a date only ever moves through here on purpose
+        if new_software_stack.owner is not None:
+            owner = new_software_stack.owner.strip()
+            if not STACK_OWNER_PATTERN.fullmatch(owner):
+                raise exceptions.invalid_params(
+                    'owner must be a username, or empty for no owner'
+                )
+            old_software_stack.owner = owner
+        if new_software_stack.clear_expires_on:
+            old_software_stack.expires_on = None
+        elif new_software_stack.expires_on is not None:
+            old_software_stack.expires_on = new_software_stack.expires_on
         if Utils.is_not_empty(new_software_stack.name):
             old_software_stack.name = new_software_stack.name
         if Utils.is_not_empty(new_software_stack.enabled):
@@ -969,7 +896,11 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
             old_software_stack.min_storage = new_software_stack.min_storage
 
-        new_software_stack = self.software_stack_db.update(old_software_stack)
+        # one write and one index update: the date goes with the rest of the edit
+        new_software_stack = self.software_stack_db.update(
+            old_software_stack,
+            clear_expires_on=bool(new_software_stack.clear_expires_on),
+        )
 
         ss_projects = []
         for project in new_software_stack.projects:
@@ -981,6 +912,416 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         new_software_stack.projects = ss_projects
 
         context.success(UpdateSoftwareStackResponse(software_stack=new_software_stack))
+
+    def move_session_to_project(self, context: ApiInvocationContext):
+        """
+        move a stopped desktop to another project of its owner. everything is read and
+        checked first; then the row, the instance profile, the instance's tags and the
+        volumes' tags change in that order, each step safe to repeat, and a failure puts
+        back every step already made. costs already recorded stay with the old project.
+        """
+        request = context.get_request_payload_as(UpdateSessionRequest).session
+
+        def refuse(message, error_code=errorcodes.INVALID_PARAMS):
+            request.failure_reason = message
+            context.fail(
+                message=message,
+                error_code=error_code,
+                payload=UpdateSessionResponse(session=request),
+            )
+
+        # the owner's decision gives this to administrators; managers do not move desktops
+        if not context.is_administrator():
+            raise exceptions.unauthorized_access()
+        session, previous, failure_reason = self._session_movable_to_project(request)
+        if failure_reason is not None:
+            refuse(failure_reason)
+            return
+        plan, failure_reason = self._plan_project_move(
+            session, previous, context.get_username()
+        )
+        if failure_reason is not None:
+            refuse(failure_reason)
+            return
+
+        done = []
+        step = 'row'
+        tagged = []
+        try:
+            # the row records the profile the host is on once the move completes
+            session.server.instance_profile_arn = plan['target_profile_arn']
+            moved = self.session_db.update(session, check_version=True)
+            done.append('row')
+            if plan['profile_arn'] is not None:
+                step = 'profile'
+                self._swap_instance_profile(plan['instance_id'], plan['profile_arn'])
+                done.append('profile')
+            self.server_db.update(moved.server)
+            for step, resources in (
+                ('instance tags', [plan['instance_id']]),
+                ('volume tags', plan['volume_ids']),
+            ):
+                if resources:
+                    tagged.clear()
+                    self._apply_tags(
+                        resources, plan['set_tags'], plan['remove_keys'], tagged
+                    )
+                    done.append(step)
+        except Exception as e:
+            code = (
+                e.response.get('Error', {}).get('Code')
+                if isinstance(e, ClientError)
+                else None
+            )
+            if code == 'ConditionalCheckFailedException' and not done:
+                refuse(SESSION_CHANGED_MESSAGE)
+                return
+            # an AWS refusal changed nothing at this step; any other failure (a timeout, a
+            # request botocore would not send) may have, and every undo step is safe to repeat
+            # the row write can land and then fail on its run record or event, and a stopped
+            # host's role change is two calls: either step may be part made whatever failed
+            if step not in done and (
+                step in ('row', 'profile') or code is None or tagged
+            ):
+                done.append(step)
+            self._logger.error(
+                f'moving desktop {session.idea_session_id} to project '
+                f'{session.project.project_id} stopped at {step}: {e}'
+            )
+            undone = self._undo_project_move(plan, done, session, previous)
+            what = MOVE_STEP_NAMES.get(step, 'A step')
+            refuse(
+                f'The desktop could not be moved: {what} failed, and '
+                + (
+                    'nothing was changed.'
+                    if undone
+                    else 'some of it could not be undone; check its project, role and tags.'
+                ),
+                errorcodes.GENERAL_ERROR,
+            )
+            return
+
+        self._logger.info(
+            f'{context.get_username()} moved desktop {moved.idea_session_id} of '
+            f'{moved.owner} from project {previous.project_id if previous else None} to '
+            f'{moved.project.project_id}'
+        )
+        context.success(UpdateSessionResponse(session=moved))
+
+    def _session_movable_to_project(self, request: VirtualDesktopSession):
+        """the stored desktop with its new project, or the reason it cannot move"""
+        if (
+            request is None
+            or Utils.is_any_empty(request.idea_session_id, request.owner)
+            or request.project is None
+            or Utils.is_empty(request.project.project_id)
+        ):
+            return (
+                None,
+                None,
+                'session.idea_session_id, session.owner and session.project.project_id are required.',
+            )
+        session = self.session_db.get_from_db(
+            idea_session_owner=request.owner, idea_session_id=request.idea_session_id
+        )
+        if session is None:
+            return None, None, 'The desktop could not be found.'
+        # the instance role and project file systems are attached at start, so a running
+        # desktop would keep the old project's until it restarted
+        if session.state != VirtualDesktopSessionState.STOPPED:
+            return None, None, 'Stop the desktop before moving it to another project.'
+        project_id = request.project.project_id
+        if session.project is not None and session.project.project_id == project_id:
+            return None, None, 'The desktop is already in that project.'
+        target = self.context.projects_client.get_project(
+            GetProjectRequest(project_id=project_id)
+        ).project
+        if target is None:
+            return None, None, f'Project {project_id} was not found.'
+        if not target.is_enabled():
+            return None, None, f'Project {target.name} is disabled.'
+        if not self.is_cluster_administrator_username(session.owner) and not any(
+            project.project_id == project_id
+            for project in self.context.projects_client.get_user_projects(
+                username=session.owner
+            )
+        ):
+            return (
+                None,
+                None,
+                f'{session.owner} is not a member of project {target.name}.',
+            )
+        stack = (
+            self.software_stack_db.get(
+                stack_id=session.software_stack.stack_id,
+                base_os=session.software_stack.base_os,
+            )
+            if session.software_stack is not None
+            else None
+        )
+        if stack is None:
+            return None, None, "The desktop's software stack no longer exists."
+        if not any(project.project_id == project_id for project in stack.projects):
+            return (
+                None,
+                None,
+                f'The software stack {stack.name} is not available in project {target.name}.',
+            )
+        previous = session.project
+        session.project = target
+        return session, previous, None
+
+    def _plan_project_move(self, session, previous, moved_by: str):
+        """every read the move needs, before anything changes"""
+        instance_id = session.server.instance_id if session.server else None
+        if Utils.is_empty(instance_id):
+            return None, 'The desktop has no host to move.'
+        instance = self.controller_utils.describe_instance(instance_id)
+        if instance is None:
+            return None, "The desktop's host could not be read. Try again."
+        if not instance:
+            return None, "The desktop's host no longer exists."
+        if instance.get('State', {}).get('Name') != 'stopped':
+            return None, 'Stop the desktop before moving it to another project.'
+
+        # the host ends on the profile the target project resolves to, decided from what is
+        # attached now: a source project that no longer resolves to the profile its host
+        # carries (budget spent, Bedrock off) must not leave that profile on after the move
+        current_arn = (instance.get('IamInstanceProfile') or {}).get('Arn')
+        target_arn = self._resolve_instance_profile_arn(session)
+        profile_arn = target_arn if target_arn != current_arn else None
+
+        custom = Utils.convert_custom_tags_to_key_value_pairs(
+            self.context.config().get_list('global-settings.custom_tags', default=[])
+        )
+        new_project_tags, failure_reason = self._movable_project_tags(session.project)
+        if failure_reason is not None:
+            return None, failure_reason
+        # the stored row does not carry the old project's tags: they are read from it
+        old_project = (
+            self.context.projects_client.get_project(
+                GetProjectRequest(project_id=previous.project_id)
+            ).project
+            if previous is not None and previous.project_id
+            else None
+        )
+        old_project_tags = {
+            t.key: t.value for t in ((old_project.tags if old_project else None) or [])
+        }
+        set_tags = {
+            constants.IDEA_TAG_PROJECT: session.project.name,
+            **new_project_tags,
+            f'{constants.IDEA_TAG_PREFIX}ProjectMovedBy': moved_by,
+            f'{constants.IDEA_TAG_PREFIX}ProjectMovedOn': str(Utils.current_time_ms()),
+        }
+        remove_keys = []
+        for key in old_project_tags:
+            if key in set_tags or key.startswith(constants.IDEA_TAG_PREFIX):
+                # a system tag the old project overrode keeps its key
+                continue
+            if key in custom:
+                # the cluster's own custom value returns under the key
+                set_tags[key] = custom[key]
+            else:
+                remove_keys.append(key)
+        # undo puts back what the instance carries now under every key the move touches;
+        # the host copied the instance's tags onto its volumes, so they get the same
+        current_tags = {
+            t.get('Key'): t.get('Value')
+            for t in instance.get('Tags', [])
+            if t.get('Key')
+        }
+        touched = set(set_tags) | set(remove_keys)
+        restore_tags = {k: current_tags[k] for k in touched if k in current_tags}
+        volume_ids = [
+            m['Ebs']['VolumeId']
+            for m in instance.get('BlockDeviceMappings', [])
+            if m.get('Ebs', {}).get('VolumeId')
+        ]
+        # the volumes are retagged only while they carry this cluster's name, which the
+        # host's own bootstrap writes; a volume without it would refuse the whole step
+        if volume_ids:
+            try:
+                volumes = self.controller_utils.ec2_client.describe_volumes(
+                    VolumeIds=volume_ids
+                ).get('Volumes', [])
+            except Exception as e:
+                self._logger.warning(
+                    f'could not read the volumes of {instance_id}: {e}'
+                )
+                return None, "The desktop's volumes could not be read. Try again."
+            for volume in volumes:
+                tags = {t.get('Key'): t.get('Value') for t in volume.get('Tags', [])}
+                if (
+                    tags.get(constants.IDEA_TAG_CLUSTER_NAME)
+                    != self.context.cluster_name()
+                ):
+                    return None, (
+                        f"The desktop's volume {volume.get('VolumeId')} has no "
+                        f'{constants.IDEA_TAG_CLUSTER_NAME}={self.context.cluster_name()} tag, so its '
+                        f'tags cannot be moved. Add that tag to the volume, then move the desktop.'
+                    )
+        return {
+            'instance_id': instance_id,
+            'volume_ids': volume_ids,
+            'profile_arn': profile_arn,
+            'target_profile_arn': target_arn,
+            'previous_profile_arn': current_arn,
+            'set_tags': set_tags,
+            'remove_keys': remove_keys,
+            'restore_tags': restore_tags,
+            'undo_remove_keys': [k for k in set_tags if k not in restore_tags],
+        }, None
+
+    def _movable_project_tags(self, project):
+        """
+        the project's tags as the move writes them, or why they cannot be: an empty value is
+        left out, as at launch; a key AWS or this cluster reserves is refused before any write
+        """
+        tags = {}
+        for tag in project.tags or []:
+            key = (tag.key or '').strip()
+            value = Utils.get_as_string(tag.value)
+            if Utils.is_empty(value):
+                continue
+            if (
+                not key
+                or len(key) > 128
+                or len(value) > 256
+                or key.lower().startswith('aws:')
+                or key in MOVE_RESERVED_TAG_KEYS
+            ):
+                return None, (
+                    f'Project {project.name} has a tag ({key or "no key"}) that cannot be put '
+                    f"on a desktop. Correct the project's tags, then move the desktop."
+                )
+            tags[key] = value
+        return tags, None
+
+    def _swap_instance_profile(
+        self, instance_id: str, instance_profile_arn: Optional[str]
+    ):
+        """put the instance on the profile, or on none; repeating it changes nothing"""
+        ec2 = self.controller_utils.ec2_client
+        association = self.controller_utils.get_instance_profile_association(
+            instance_id
+        )
+        if association is None:
+            raise ClientError(
+                {'Error': {'Code': 'AssociationUnreadable', 'Message': instance_id}},
+                'DescribeIamInstanceProfileAssociations',
+            )
+        current = (association.get('IamInstanceProfile') or {}).get('Arn')
+        if current == instance_profile_arn:
+            return
+        if instance_profile_arn is None:
+            ec2.disassociate_iam_instance_profile(
+                AssociationId=association['AssociationId']
+            )
+        else:
+            # the move's host is stopped
+            self.controller_utils.put_on_instance_profile(
+                instance_id,
+                instance_profile_arn,
+                association.get('AssociationId'),
+                stopped=True,
+                previous_arn=current,
+            )
+
+    def _apply_tags(self, resources, set_tags: Dict, remove_keys, progress=None):
+        """progress hears 'created' once the new values are on, before any key is removed"""
+        ec2 = self.controller_utils.ec2_client
+        ec2.create_tags(
+            Resources=resources,
+            Tags=[
+                {'Key': k, 'Value': Utils.get_as_string(v)} for k, v in set_tags.items()
+            ],
+        )
+        if progress is not None:
+            progress.append('created')
+        if remove_keys:
+            ec2.delete_tags(
+                Resources=resources, Tags=[{'Key': k} for k in sorted(remove_keys)]
+            )
+
+    def _undo_project_move(self, plan, done, session, previous) -> bool:
+        """put back every step made, newest first; True when all of it went back"""
+        undone = True
+        for step in reversed(done):
+            try:
+                if step in ('instance tags', 'volume tags'):
+                    resources = (
+                        [plan['instance_id']]
+                        if step == 'instance tags'
+                        else plan['volume_ids']
+                    )
+                    self._apply_tags(
+                        resources, plan['restore_tags'], plan['undo_remove_keys']
+                    )
+                elif step == 'profile':
+                    self._swap_instance_profile(
+                        plan['instance_id'], plan['previous_profile_arn']
+                    )
+                elif step == 'row':
+                    # read again: the write may have landed even though it did not answer
+                    current = self.session_db.get_from_db(
+                        idea_session_owner=session.owner,
+                        idea_session_id=session.idea_session_id,
+                    )
+                    if (
+                        current is not None
+                        and current.project is not None
+                        and current.project.project_id == session.project.project_id
+                    ):
+                        current.project = previous
+                        if current.server is not None:
+                            current.server.instance_profile_arn = plan[
+                                'previous_profile_arn'
+                            ]
+                        restored = self.session_db.update(current, check_version=True)
+                        if restored.server is not None:
+                            self.server_db.update(restored.server)
+            except Exception as e:
+                undone = False
+                self._logger.error(
+                    f'could not undo the {step} step of a project move of '
+                    f'{plan["instance_id"]}: {e}'
+                )
+        return undone
+
+    def _set_software_stack_status(
+        self, context: ApiInvocationContext, request: VirtualDesktopSoftwareStack
+    ):
+        if (
+            Utils.is_any_empty(request.stack_id, request.base_os)
+            or request.enabled is None
+        ):
+            request.failure_reason = (
+                'software_stack.stack_id, base_os and enabled are required'
+            )
+            context.fail(
+                message=request.failure_reason,
+                error_code=errorcodes.INVALID_PARAMS,
+                payload=UpdateSoftwareStackResponse(software_stack=request),
+            )
+            return
+        try:
+            software_stack = self.software_stack_db.set_enabled(
+                request, request.enabled
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+            request.failure_reason = (
+                f'Invalid id {request.stack_id} with base os {request.base_os}'
+            )
+            context.fail(
+                message=request.failure_reason,
+                error_code=errorcodes.INVALID_PARAMS,
+                payload=UpdateSoftwareStackResponse(software_stack=request),
+            )
+            return
+        context.success(UpdateSoftwareStackResponse(software_stack=software_stack))
 
     def create_software_stack(self, context: ApiInvocationContext):
         software_stack = context.get_request_payload_as(

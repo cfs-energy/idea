@@ -80,3 +80,59 @@ def test_govcloud_uses_the_gov_partition_publishers():
     client = fake_ec2('us-east-2', [])
     find_latest_ami(client, 'RHEL-9.*', ['amazon'], Mock(), 'rhel9')
     assert client.describe_images.call_args.kwargs['Owners'] == ['309956199498']
+
+
+def test_a_govcloud_rocky_lookup_is_unsupported_and_asks_nothing():
+    client = fake_ec2('us-gov-west-1', [])
+    logger = Mock()
+    assert (
+        find_latest_ami(client, 'Rocky-9-EC2-Base-9.*', ['amazon'], logger, 'rocky9')
+        is None
+    )
+    client.describe_images.assert_not_called()
+    logger.warning.assert_not_called()
+    logger.error.assert_not_called()
+    assert 'Not available in this partition' in logger.info.call_args.args[0]
+    # the commercial lookup still asks the Rocky publisher
+    client = fake_ec2('us-east-2', [])
+    find_latest_ami(client, 'Rocky-9-EC2-Base-9.*', ['amazon'], Mock(), 'rocky9')
+    assert client.describe_images.call_args.kwargs['Owners'] == ['792107900819']
+
+
+@pytest.mark.parametrize(
+    'region, skipped', [('us-gov-west-1', True), ('us-east-2', False)]
+)
+def test_update_base_stacks_skips_rocky_where_no_image_is_published(
+    monkeypatch, region, skipped
+):
+    from click.testing import CliRunner
+
+    from ideavirtualdesktopcontroller.cli import software_stacks as cli
+
+    context = Mock()
+    context.config.return_value.get_string.side_effect = lambda key, **kw: (
+        region if key == 'cluster.aws.region' else 'idea-test'
+    )
+    table = context.aws.return_value.dynamodb_table.return_value.Table.return_value
+    table.scan.return_value = {
+        'Items': [
+            {
+                'stack_id': 'ss-base-rocky9-x86-64-base',
+                'base_os': 'rocky9',
+                'ami_id': 'ami-site',
+            }
+        ]
+    }
+    ec2 = fake_ec2(region, [])
+    context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(cli, 'build_cli_context', lambda: context)
+    out = CliRunner().invoke(cli.update_base_stacks, ['--dry-run']).output
+    if skipped:
+        assert (
+            'Skipping ss-base-rocky9-x86-64-base: Not available in this partition'
+            in out
+        )
+        assert 'Errors encountered: 0' in out and 'Error:' not in out
+        ec2.describe_images.assert_not_called()
+    else:
+        ec2.describe_images.assert_called()

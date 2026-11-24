@@ -14,7 +14,11 @@ from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 
 from ideadatamodel import exceptions, errorcodes
-from ideadatamodel.scheduler import HpcQueueProfile, SocaScalingMode
+from ideadatamodel.scheduler import (
+    HpcQueueProfile,
+    SocaQueueManagementParams,
+    SocaScalingMode,
+)
 from ideascheduler.app.provisioning.job_provisioning_queue.hpc_queue_profiles_dao import (
     HpcQueueProfilesDAO,
 )
@@ -24,6 +28,34 @@ from ideascheduler.app.provisioning import JobProvisioningQueue, JobProvisioner
 
 from typing import List, Dict, Optional
 from threading import RLock
+
+# PBS_MAXQUEUENAME: the longest queue name the scheduler accepts
+SCHEDULER_QUEUE_NAME_MAX_LENGTH = 15
+
+
+def cleared_default_keys(default_job_params, stored_keys: List[str]) -> List[str]:
+    """
+    the stored param_* attributes of the defaults an update explicitly set to null: a field
+    (param_<name>, and param_<name>_unit for a size), all of fsx_lustre, or one setting of
+    fsx_lustre. a field the update does not mention is not touched.
+    """
+
+    def keys(prefix: str) -> List[str]:
+        # a size is stored as the value and its unit
+        return [k for k in stored_keys if k in (prefix, f'{prefix}_unit')]
+
+    cleared = []
+    for name in default_job_params.model_fields_set:
+        value = getattr(default_job_params, name)
+        if value is None and name == 'fsx_lustre':
+            cleared += [k for k in stored_keys if k.startswith('param_fsx_lustre_')]
+        elif value is None:
+            cleared += keys(f'param_{name}')
+        elif name == 'fsx_lustre':
+            for setting in value.model_fields_set:
+                if getattr(value, setting) is None:
+                    cleared += keys(f'param_fsx_lustre_{setting}')
+    return cleared
 
 
 class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
@@ -61,6 +93,8 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
     def initialize_job_provisioner(self, queue_profile: HpcQueueProfile):
         if Utils.is_false(queue_profile.enabled):
+            # an update that stores enabled=false left the running worker on (SP-29)
+            self.stop_job_provisioner(queue_profile)
             return
 
         with self._provisioning_queue_lock:
@@ -98,6 +132,7 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
             raise exceptions.invalid_params('queue_profile.name is required')
         if Utils.is_empty(queue_profile.queues):
             raise exceptions.invalid_params('queue_profile.queues is required')
+        self.validate_queue_names(queue_profile.queues)
         if Utils.is_empty(queue_profile.scaling_mode) and not Utils.get_as_bool(
             queue_profile.keep_forever, False
         ):
@@ -151,6 +186,21 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 + (f': {reasons}' if reasons else ''),
                 ref=validation_result,
             )
+
+    @staticmethod
+    def validate_queue_names(queue_names: List[str]):
+        """
+        refuse a queue name the scheduler cannot hold, before anything is written. PBS
+        answers a longer one with "illegal 'destination' value", and by then the profile
+        row existed with a queue that could be neither created nor deleted.
+        """
+        for queue_name in queue_names:
+            if len(queue_name) > SCHEDULER_QUEUE_NAME_MAX_LENGTH:
+                raise exceptions.invalid_params(
+                    f'Queue name {queue_name} is {len(queue_name)} characters long. '
+                    f'The scheduler allows {SCHEDULER_QUEUE_NAME_MAX_LENGTH}. '
+                    f'Use a shorter queue name.'
+                )
 
     def cache_get(
         self,
@@ -208,16 +258,26 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 f'queue profile already exists for queue profile name: {queue_profile.name}'
             )
 
+        self._refuse_queues_of_other_profiles(queue_profile.queues, None)
+
         # set enabled to explicit false during creation
         queue_profile.enabled = False
+
+        # a profile created from 26.11.2 on lets jobs create a new FSx for Lustre only
+        # when an administrator says so; profiles stored earlier keep allowing it
+        if queue_profile.queue_management_params is None:
+            queue_profile.queue_management_params = SocaQueueManagementParams()
+        if queue_profile.queue_management_params.allow_new_fsx_lustre is None:
+            queue_profile.queue_management_params.allow_new_fsx_lustre = False
+
+        # scheduler queues come first, as on an update: a profile is never written with
+        # a queue the scheduler refused, which could then be neither used nor deleted
+        self._create_queues(queue_names=queue_profile.queues)
 
         db_queue_profile = self.queue_profile_dao.convert_to_db(queue_profile)
         db_created = self.queue_profile_dao.create_queue_profile(db_queue_profile)
 
         created = self.queue_profile_dao.convert_from_db(db_created)
-
-        if Utils.is_not_empty(queue_profile.queues):
-            self._create_queues(queue_names=created.queues)
 
         self.cache_set(created)
 
@@ -349,6 +409,18 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         db_updates = self.queue_profile_dao.convert_to_db(queue_profile)
 
         existing_queues = Utils.get_as_list(existing_queue_profile.queues, [])
+        # only a queue this update adds is checked: a cluster can already store a queue in
+        # two profiles (start-up used to make that), and those profiles must stay editable
+        # so an operator can resolve it (A-B1)
+        self._refuse_queues_of_other_profiles(
+            [
+                queue
+                for queue in Utils.get_as_list(queue_profile.queues, [])
+                if queue not in existing_queues
+            ],
+            existing_queue_profile.queue_profile_id,
+        )
+
         # an update that carries no queues means no queue changes, never delete them all
         new_queues = Utils.get_as_list(queue_profile.queues, existing_queues)
         queues_to_delete = list(set(existing_queues) - set(new_queues))
@@ -361,7 +433,10 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
 
         queue_deletion_failures = {}
         if Utils.is_not_empty(queues_to_delete):
-            queue_deletion_failures = self._delete_queues(queue_names=queues_to_delete)
+            queue_deletion_failures = self._delete_queues(
+                queue_names=queues_to_delete,
+                queue_profile_id=existing_queue_profile.queue_profile_id,
+            )
 
         # a queue that could not be deleted is still live in the scheduler: keep it on the
         # profile so its queued jobs keep a servicing provisioner.
@@ -371,13 +446,26 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
             if queue_name in queue_deletion_failures
         ]
 
+        # a default sent as null is removed from the table; one left out is kept as stored.
+        # the portal sends the whole stored profile and nulls what it clears (the FSx
+        # settings when the scratch provider becomes EBS, for example)
+        remove_keys = []
+        if queue_profile.default_job_params is not None:
+            stored = self.queue_profile_dao.get_queue_profile_by_id(
+                existing_queue_profile.queue_profile_id
+            )
+            remove_keys = cleared_default_keys(
+                queue_profile.default_job_params, list(stored or {})
+            )
+
         # perform db update
         db_updated_queue_profile = self.queue_profile_dao.update(
             {
                 **db_updates,
                 'queue_profile_id': existing_queue_profile.queue_profile_id,
                 'queues': new_queues + retained_queues,
-            }
+            },
+            remove_keys=remove_keys,
         )
 
         updated_queue_profile = self.queue_profile_dao.convert_from_db(
@@ -410,7 +498,8 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         delete_queues = Utils.get_as_bool(delete_queues, True)
         if delete_queues and Utils.is_not_empty(queue_profile.queues):
             queue_deletion_failures = self._delete_queues(
-                queue_names=queue_profile.queues
+                queue_names=queue_profile.queues,
+                queue_profile_id=queue_profile.queue_profile_id,
             )
             if queue_deletion_failures:
                 raise self._queue_deletion_failed_exception(
@@ -444,6 +533,24 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                     raise e
         return created_count
 
+    def _refuse_queues_of_other_profiles(
+        self, queue_names: List[str], queue_profile_id: Optional[str]
+    ):
+        """
+        a PBS queue belongs to one profile: which profile's projects, restrictions and FSx
+        settings apply to its jobs must not depend on lookup order, and deleting one
+        profile must not delete another's queue (SCH-26)
+        """
+        for queue_name in queue_names or []:
+            existing = self.queue_profile_dao.get_queue_profile_by_queue(queue_name)
+            if existing is None:
+                continue
+            if existing['queue_profile_id'] != queue_profile_id:
+                raise exceptions.invalid_params(
+                    f'queue: {queue_name} is already associated with queue profile: '
+                    f'{existing["name"]}'
+                )
+
     def create_queues(
         self,
         queue_names: List[str],
@@ -454,18 +561,14 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
     ):
         if Utils.is_empty(queue_names):
             raise exceptions.invalid_params('queue_names[] is required')
+        self.validate_queue_names(queue_names)
 
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
 
         if check_existing_profile:
-            for queue_name in queue_names:
-                existing = self.queue_profile_dao.get_queue_profile_by_queue(queue_name)
-                if existing is None:
-                    continue
-                if existing['queue_profile_id'] != queue_profile.queue_profile_id:
-                    raise exceptions.invalid_params(
-                        f'queue: {queue_name} is already associated with queue profile: {existing["name"]}'
-                    )
+            self._refuse_queues_of_other_profiles(
+                queue_names, queue_profile.queue_profile_id
+            )
 
         # re-init provisioner if new queue is created in scheduler, or an existing queue is added to the queue profile
         created_count = self._create_queues(queue_names)
@@ -501,15 +604,28 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         self.initialize_job_provisioner(queue_profile)
 
     def _delete_queues(
-        self, queue_names: List[str]
+        self, queue_names: List[str], queue_profile_id: Optional[str]
     ) -> Dict[str, exceptions.SocaException]:
         """
         Calls scheduler delete queues for all queues provided in queue_names
         :param queue_names:
+        :param queue_profile_id: the profile giving the queues up. a queue another profile
+            still lists (a stored duplicate) stays in the scheduler for that profile (S4)
         :return: queue names that could not be deleted, mapped to the scheduler failure
         """
+        listed_elsewhere = {
+            queue
+            for profile in self.queue_profile_dao.list_queue_profiles()
+            if profile.get('queue_profile_id') != queue_profile_id
+            for queue in Utils.get_value_as_list('queues', profile, [])
+        }
         failures: Dict[str, exceptions.SocaException] = {}
         for queue_name in queue_names:
+            if queue_name in listed_elsewhere:
+                self.logger.info(
+                    f'scheduler queue: {queue_name} kept, another queue profile lists it'
+                )
+                continue
             try:
                 self.context.scheduler.delete_queue(queue_name=queue_name)
             except exceptions.SocaException as e:
@@ -563,7 +679,9 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 )
             updated_queues.remove(queue_name)
 
-        queue_deletion_failures = self._delete_queues(queue_names)
+        queue_deletion_failures = self._delete_queues(
+            queue_names, queue_profile.queue_profile_id
+        )
 
         if update_db:
             # dao.update() replaces the queues attribute: write the remaining queues,

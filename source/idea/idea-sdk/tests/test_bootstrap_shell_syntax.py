@@ -141,7 +141,7 @@ def job(**params) -> SocaJob:
         job_id='1',
         job_uid='job-uid',
         job_group='job-group',
-        job_name='sample-job',
+        name='sample-job',
         project='sample-project',
         owner='sample-user',
         owner_email='user@example.invalid',
@@ -377,9 +377,15 @@ def test_windows_bootstrap_package_parses(tmp_path, base_os, instance_type):
     ]
     assert scripts, f'{label}: rendered no powershell scripts'
     if PWSH is None:
-        pytest.skip(
-            'pwsh not installed: rendered the windows bootstrap, skipped the parse'
-        )
+        # same rule as the Windows behaviour tests: required in CI, a named skip elsewhere
+        import windows_pwsh
+
+        reason = 'pwsh not installed: the rendered Windows bootstrap was NOT parsed'
+        if windows_pwsh.REQUIRED:
+            pytest.fail(
+                f'{reason} (required here: CI or IDEA_REQUIRE_PWSH=1)', pytrace=False
+            )
+        pytest.skip(reason)
     errors = []
     for script in scripts:
         output = run(

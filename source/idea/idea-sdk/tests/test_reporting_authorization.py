@@ -57,6 +57,7 @@ def reporting_invocation(reporting_context, signing_key):
         claims = {
             'cognito:groups': list(groups),
             'scope': scope,
+            'token_use': 'access',
             'exp': int(time.time()) + (-60 if expired else 3600),
         }
         if username is not None:

@@ -322,3 +322,22 @@ test("createLiveDeleteClusterDeps builds live dependencies for both deletion com
     }
   }
 });
+
+test("the global settings refresh writes in place and keeps operator rows the template does not generate", async () => {
+  const { createLiveRemainingOperatorDeps } = await import("../../src/cli/live-operator-adapters.ts");
+  const { fakeDeps } = await import("../support/deploy-harness.ts");
+  const deps = fakeDeps({ tables: { "fixture.cluster-settings": [
+    { key: "global-settings.module_sets.default.cluster.module_id", value: "cluster", source: "template" },
+    { key: "global-settings.package_config.efs_utils.commit", value: "0123456789abcdef0123456789abcdef01234567", source: "cli" },
+    { key: "global-settings.retired_template_row", value: "old", source: "template" },
+    // another module set the cluster has: kept for a live module, removed for a dropped one
+    { key: "global-settings.module_sets.secondary.cluster.module_id", value: "cluster-b" },
+    { key: "global-settings.module_sets.secondary.retired-module.module_id", value: "retired-b" },
+  ] } });
+  const factory = createLiveRemainingOperatorDeps(deps).utils as unknown as (options: object) => Promise<{ syncGlobalSettings(input: { deletePrefix: string; entries: Array<{ key: string; value: unknown }> }): Promise<void> }>;
+  const utils = await factory({ clusterName: "fixture", awsRegion: "us-east-2" });
+  await utils.syncGlobalSettings({ deletePrefix: "global-settings.", entries: [{ key: "global-settings.module_sets.default.cluster.module_id", value: "cluster" }] });
+  const deletes = deps.writes.filter((write) => write.op === "deleteConfigEntries").map((write) => write.payload);
+  assert.deepEqual(deletes.sort(), ["global-settings.module_sets.secondary.retired-module.module_id", "global-settings.retired_template_row"]);
+  assert.equal(deps.writes[0]!.op, "syncClusterSettingsInDb", "the rows are rewritten before anything is removed");
+});

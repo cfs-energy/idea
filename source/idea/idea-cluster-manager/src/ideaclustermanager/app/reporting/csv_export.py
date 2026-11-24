@@ -2,12 +2,47 @@
 
 import csv
 import io
-import json
 from typing import get_args
 
 from ideadatamodel import ExportReportingCsvResult, exceptions
 from ideadatamodel.reporting.reporting_api import Column
 from .snapshot_store import MAX_CSV_BYTES, column_value, too_large
+
+
+COLUMN_TITLES = {
+    'key': 'Key',
+    'label': 'Name',
+    'project_id': 'Project ID',
+    'spend_total': 'Total spend',
+    'jobs': 'Job spend',
+    'desktops': 'Desktop spend',
+    'desktop_disks': 'Desktop disk spend',
+    'shared_storage': 'Shared storage spend',
+    'ai': 'AI spend',
+    'job_count': 'Jobs',
+    'node_hours': 'Node-hours',
+    'requested_walltime_hours': 'Requested hours',
+    'elapsed_hours': 'Elapsed hours',
+    'efficiency_pct': 'Walltime efficiency',
+    'desktop_hours': 'Desktop hours',
+    'idle_stops': 'Idle stops',
+}
+
+
+def completeness(coverage) -> str:
+    """Plain words for whether a row's money is fully counted: nobody reads JSON in a
+    spreadsheet. Only spend_total: every row carries facets and activity metrics it can
+    never have (idle stops, a project's desktop spend), so those would make every row
+    partial."""
+    total = (coverage or {}).get('spend_total') or {}
+    if total.get('status') == 'unavailable':
+        return 'Unavailable'
+    # facets and users can miss different days, and only their counts are kept: the
+    # largest is a floor, the true number is their union
+    missing = total.get('missing_days') or 0
+    if missing:
+        return f'Partial: missing at least {missing} day{"" if missing == 1 else "s"}'
+    return 'Partial' if total.get('status') == 'partial' else 'Complete'
 
 
 def safe_text(value):
@@ -32,13 +67,13 @@ def export_csv(summary, rows, table, columns):
     writer = csv.writer(stream)
     writer.writerow(
         [
-            'period',
-            'start_date',
-            'end_date',
-            'currency',
-            'source_as_of',
-            'coverage',
-            *columns,
+            'Period',
+            'Start date',
+            'End date',
+            'Currency',
+            'Costs as of',
+            'Complete',
+            *(COLUMN_TITLES.get(column, column) for column in columns),
         ]
     )
     period = summary['period']
@@ -65,7 +100,7 @@ def export_csv(summary, rows, table, columns):
                 period['end_date'],
                 summary['currency'],
                 summary['as_of'],
-                json.dumps(row['coverage'], ensure_ascii=False, separators=(',', ':')),
+                completeness(row.get('coverage')),
                 *values,
             ]
         )

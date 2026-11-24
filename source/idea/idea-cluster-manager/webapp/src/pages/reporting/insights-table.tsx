@@ -1,5 +1,6 @@
 import {createContext, ReactNode, useContext, useState} from 'react';
 import {useCollection} from '@cloudscape-design/collection-hooks';
+import {csvCell, downloadCsv} from '../../common/csv';
 import {Box, Button, CollectionPreferences, Header, Pagination, Table, TableProps, TextFilter, Select, SpaceBetween} from '@cloudscape-design/components';
 
 export const ReportLoading = createContext(false);
@@ -10,20 +11,13 @@ export interface InsightColumn<T> extends TableProps.ColumnDefinition<T> {
     label: string;
     value: (row: T) => string | number | null | undefined;
 }
-export function downloadCsv(filename: string, content: string, type = 'text/csv;charset=utf-8') {
-    const url = URL.createObjectURL(new Blob([content], {type}));
-    const link = document.createElement('a');
-    try {link.href = url; link.download = filename; document.body.appendChild(link); link.click();}
-    finally {link.remove(); URL.revokeObjectURL(url);}
-}
-export const csvCell = (value: unknown) => `"${(typeof value === 'string' ? value.replace(/^(\s*[=+@-])/, "'$1") : String(value ?? '')).replaceAll('"', '""')}"`;
 export function readPreferences<T>(key: string, fallback: T): T {
     try {return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback;} catch {return fallback;}
 }
 export function savePreferences(key: string, value: unknown) {
     try {localStorage.setItem(key, JSON.stringify(value));} catch { /* Storage can be disabled. */ }
 }
-export default function InsightsTable<T>({title, rows, columns, empty, defaultSort, hidden = [], tableId = title, description, jobSort = false}: {title: string; rows: T[]; columns: InsightColumn<T>[]; empty: string; defaultSort?: string; hidden?: string[]; tableId?: string; description?: ReactNode; jobSort?: boolean}) {
+export default function InsightsTable<T>({title, rows, columns, empty, defaultSort, hidden = [], tableId = title, description, jobSort = false, exportLabel = 'Export CSV'}: {title: string; rows: T[]; columns: InsightColumn<T>[]; empty: string; defaultSort?: string; hidden?: string[]; tableId?: string; description?: ReactNode; jobSort?: boolean; exportLabel?: string}) {
     const loading = useContext(ReportLoading);
     const username = useContext(ReportUser);
     const key = `reporting.table.${tableId}`;
@@ -44,7 +38,7 @@ export default function InsightsTable<T>({title, rows, columns, empty, defaultSo
         ariaLabels={{tableLabel: title}} header={<Header variant="h2" description={description} counter={`(${rows.length})`} actions={<Button disabled={!rows.length} onClick={() => {
             const selected = display.filter(column => column.visible).flatMap(column => available.filter(item => item.id === column.id));
             downloadCsv(`${title.toLowerCase().replaceAll(' ', '-')}${username ? `-${encodeURIComponent(username)}` : ''}.csv`, [selected.map(column => csvCell(column.label)).join(','), ...allPageItems.map(row => selected.map(column => csvCell(column.value(row))).join(','))].join('\r\n'));
-        }}>Export CSV</Button>}>{title}</Header>}
+        }}>{exportLabel}</Button>}>{title}</Header>}
         filter={<SpaceBetween size="s" direction="horizontal">{jobSort && <Select ariaLabel="Sort jobs" options={[{label: 'Highest cost', value: 'cost'}, {label: 'Most unused cores', value: 'wasted_core_hours'}]}
             selectedOption={{label: collectionProps.sortingColumn?.sortingField === 'wasted_core_hours' ? 'Most unused cores' : 'Highest cost', value: collectionProps.sortingColumn?.sortingField ?? 'cost'}}
             onChange={({detail}) => actions.setSorting({sortingColumn: definitions.find(column => column.id === detail.selectedOption.value) ?? {}, isDescending: true})}/>}

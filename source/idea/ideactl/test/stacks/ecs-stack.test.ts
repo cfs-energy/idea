@@ -250,10 +250,14 @@ test("adopts existing agent log groups with 90-day retention and preserves them 
     `/${CLUSTER}/cm`,
     `/${CLUSTER}/ecs/exec`,
     `/${CLUSTER}/scheduler`,
+    `/${CLUSTER}/scheduler/ami-builder`,
     `/${CLUSTER}/scheduler/openpbs`,
+    `/${CLUSTER}/vdc/ami-builder`,
     `/${CLUSTER}/vdc/controller`,
     `/${CLUSTER}/vdc/dcv-broker`,
     `/${CLUSTER}/vdc/dcv-connection-gateway`,
+    // host groups: their retention comes from the deploy, as hosts hold no retention grant
+    `/${CLUSTER}/vdc/dcv-host`,
   ];
 
   assert.equal(
@@ -542,8 +546,9 @@ test("mounts the control plane's shared storage on the hosts as the host bootstr
   const userData = JSON.stringify(launchData["UserData"]);
   // The export path and the fstab-shaped options, exactly as the host bootstrap wrote them
   // (a production cluster mounts two ONTAP volumes this way; the first container build mounted the bare SVM).
-  assert.ok(userData.includes(`svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com:/profiles/Users/User_Home_Folders /home/ ${options}`), "ONTAP fstab entry");
-  assert.ok(userData.includes("fs-0123456789abcdef1.fsx.us-east-2.amazonaws.com@tcp:/abcdefgh /lustre/ lustre defaults,noatime,flock,_netdev 0 0"), "Lustre fstab entry");
+  // ... with nodev added, as the host bootstrap now adds it unless dev or nodev is named
+  assert.ok(userData.includes(`svm-0123456789abcdef0.fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com:/profiles/Users/User_Home_Folders /home/ ${options.replace(" 0 0", ",nodev 0 0")}`), "ONTAP fstab entry");
+  assert.ok(userData.includes("fs-0123456789abcdef1.fsx.us-east-2.amazonaws.com@tcp:/abcdefgh /lustre/ lustre defaults,noatime,flock,_netdev,nodev 0 0"), "Lustre fstab entry");
   assert.ok(userData.includes("dnf install -y lustre-client"), "the Lustre client is installed when a Lustre entry exists");
   assert.ok(userData.includes("mount -a"), "the entries are mounted");
   assert.ok(!userData.includes("/nodes"), "storage scoped to compute nodes is not mounted on the control plane hosts");
@@ -857,4 +862,72 @@ test("Container Insights is off when Datadog collects the same series, and toggl
     }],
   });
   assert.deepEqual(verdict.refusals, []);
+});
+
+test("module-scoped storage reaches only the task of a module it names; the shared hosts mount it for any", () => {
+  const overrides = {
+    "storage.scoped.provider": "fsx_netapp_ontap",
+    "storage.scoped.mount_dir": "/scoped",
+    "storage.scoped.scope": ["module"],
+    "storage.scoped.modules": ["scheduler"],
+    "storage.scoped.fsx_netapp_ontap.svm.nfs_dns": "storage.example.invalid",
+    "storage.scoped.fsx_netapp_ontap.volume.volume_path": "/data",
+  };
+  const config = settings(false, overrides);
+  const has = (moduleName?: string) => storageMounts(config, moduleName).some((mount) => mount.mountPath === "/scoped");
+  assert.equal(has(), true);
+  assert.equal(has("scheduler"), true);
+  assert.equal(has("bastion-host"), false);
+  assert.equal(has("cluster-manager"), false);
+});
+
+test("an EFS share the hosts mount with tls and iam is mounted by tasks the same way", async () => {
+  const { Stack } = await import("aws-cdk-lib");
+  const ecs = await import("aws-cdk-lib/aws-ecs");
+  const { addStorageMounts } = await import("../../src/cdk/constructs/container.ts");
+  const volumes = (options: string | undefined) => {
+    const config = settings(false, options === undefined ? {} : { "storage.apps.mount_options": options });
+    const stack = new Stack();
+    const task = new ecs.Ec2TaskDefinition(stack, "task");
+    const container = task.addContainer("app", { image: ecs.ContainerImage.fromRegistry("example.invalid/app"), memoryLimitMiB: 64 });
+    addStorageMounts({ ctx: { config } } as never, task, container, "scheduler");
+    const resource = Object.values(Template.fromStack(stack).findResources("AWS::ECS::TaskDefinition"))[0] as any;
+    const readOnly = (resource.Properties.ContainerDefinitions as any[])[0].MountPoints.find((point: any) => point.SourceVolume === "storage-apps").ReadOnly;
+    return { ...(resource.Properties.Volumes as any[]).find((volume) => volume.Name === "storage-apps")!.EFSVolumeConfiguration, readOnly };
+  };
+  assert.deepEqual(volumes("efs _netdev,noresvport,tls,iam 0 0"), { FilesystemId: "fs-syntheticapps", TransitEncryption: "ENABLED", AuthorizationConfig: { IAM: "ENABLED" }, readOnly: false });
+  assert.deepEqual(volumes("efs _netdev,noresvport,tls 0 0"), { FilesystemId: "fs-syntheticapps", TransitEncryption: "ENABLED", readOnly: false });
+  assert.deepEqual(volumes(undefined), { FilesystemId: "fs-syntheticapps", readOnly: false });
+  // a share the operator marked read-only is read-only in the tasks as on the hosts
+  assert.deepEqual(volumes("efs _netdev,ro,tls,iam 0 0"), { FilesystemId: "fs-syntheticapps", TransitEncryption: "ENABLED", AuthorizationConfig: { IAM: "ENABLED" }, readOnly: true });
+});
+
+for (const [what, overrides] of [
+  ["a mount directory with a space", { "storage.home.mount_dir": "/data/my share" }],
+  ["a mount directory with a command substitution", { "storage.home.mount_dir": "/data/$(id)" }],
+  ["an endpoint with a quote", { "storage.home.fsx_netapp_ontap.svm.nfs_dns": "svm.example\"invalid" }],
+  ["mount options with a semicolon", { "storage.home.mount_options": "nfs4 nfsvers=4.1;reboot 0 0" }],
+] as const) {
+  test(`the container hosts refuse ${what} rather than write it into root's user data`, () => {
+    assert.throws(() => synth(false, {
+      "storage.home.provider": "fsx_netapp_ontap",
+      "storage.home.mount_dir": "/home",
+      "storage.home.scope": ["cluster"],
+      "storage.home.fsx_netapp_ontap.svm.nfs_dns": "svm.example.invalid",
+      "storage.home.fsx_netapp_ontap.volume.volume_path": "/home",
+      ...overrides,
+    }), /has a character the host mount cannot take/);
+  });
+}
+
+test("each container host records the mount set it was built with", async () => {
+  const { hostStorageDigest } = await import("../../src/cdk/stacks/ecs.ts");
+  const overrides = {
+    "storage.home.provider": "fsx_netapp_ontap", "storage.home.mount_dir": "/home", "storage.home.scope": ["cluster"],
+    "storage.home.fsx_netapp_ontap.svm.nfs_dns": "svm.example.invalid", "storage.home.fsx_netapp_ontap.volume.volume_path": "/home",
+  };
+  const resources = resourcesOf(synth(false, overrides));
+  const launchTemplate = findResource(resources, "AWS::EC2::LaunchTemplate", () => true);
+  const userData = JSON.stringify(record(record(launchTemplate["Properties"], "launch template properties")["LaunchTemplateData"], "launch data")["UserData"]);
+  assert.ok(userData.includes("ECS_INSTANCE_ATTRIBUTES") && userData.includes(hostStorageDigest(settings(false, overrides))), "the digest is in the host's ECS agent config");
 });

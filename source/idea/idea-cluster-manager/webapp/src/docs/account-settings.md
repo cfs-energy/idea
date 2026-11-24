@@ -8,5 +8,7 @@ Context help coming soon ...
 Create a named token for automation with an expiry of 30, 90, 180, or 365 days.
 Copy it before closing the confirmation: it will not be shown again. Send it in the
 `Authorization: Bearer` header. Tokens use your current permissions, including group
-changes. Revoke a token in this page when it is no longer needed; revocation reaches
-all services within 60 seconds. Last used updates at most once per minute.
+changes, and can do anything you can do through the API, including fetching your
+SSH key: keep it as safe as a password. Revoke a token in this page when it is no
+longer needed; revocation reaches all services within 60 seconds. Last used updates
+at most once per minute.

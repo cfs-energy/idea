@@ -156,7 +156,7 @@ class EmailTemplatesDAO:
         if Utils.is_not_empty(cursor):
             last_evaluated_key = Utils.from_json(Utils.base64_decode(cursor))
         if last_evaluated_key is not None:
-            scan_request['LastEvaluatedKey'] = last_evaluated_key
+            scan_request['ExclusiveStartKey'] = last_evaluated_key
 
         scan_filter = None
         if Utils.is_not_empty(request.filters):
@@ -175,19 +175,13 @@ class EmailTemplatesDAO:
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
 
-        scan_result = self.table.scan(**scan_request)
+        db_email_templates = Utils.scan_all(self.table, scan_request)
 
-        db_email_templates = Utils.get_value_as_list('Items', scan_result, [])
         email_templates = []
         for db_email_template in db_email_templates:
             email_template = self.convert_from_db(db_email_template)
             email_templates.append(email_template)
 
-        response_cursor = None
-        last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', scan_result)
-        if last_evaluated_key is not None:
-            response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
-
         return ListEmailTemplatesResult(
-            listing=email_templates, paginator=SocaPaginator(cursor=response_cursor)
+            listing=email_templates, paginator=SocaPaginator()
         )

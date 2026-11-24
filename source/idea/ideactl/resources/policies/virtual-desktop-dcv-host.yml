@@ -1,12 +1,25 @@
 Version: '2012-10-17'
 Statement:
 
+  {% set bucket = context.config.get_string('cluster.cluster_s3_bucket', required=True) %}
+  {% set vdc = context.config.get_module_id('virtual-desktop-controller') %}
+  {% set scheduler = context.config.get_module_id('scheduler') if context.config.is_module_enabled('scheduler') else '' %}
+  # The CloudWatch agent writes a desktop's and a desktop image builder's logs, and a compute
+  # node's when a project role runs one, and sets those groups' retention. Run Command output for
+  # a session goes under dcv-session/; that agent sets no retention.
   - Action:
       - logs:CreateLogGroup
       - logs:CreateLogStream
       - logs:PutLogEvents
-    Resource: '*'
+    Resource:
+      - '{{ context.arns.get_log_group_arn("/" + vdc + "/dcv-host*") }}'
+      - '{{ context.arns.get_log_group_arn("/" + vdc + "/ami-builder*") }}'
+      - '{{ context.arns.get_log_group_arn("/" + vdc + "/dcv-session/*") }}'
+      {%- if scheduler %}
+      - '{{ context.arns.get_log_group_arn("/" + scheduler + "/job-*") }}'
+      {%- endif %}
     Effect: Allow
+
 
   - Action:
       - s3:GetObject
@@ -15,11 +28,32 @@ Statement:
       {{ context.utils.to_yaml(context.arns.s3_global_arns) | indent(6) }}
     Effect: Allow
 
+  # A GPU driver mirror an operator configured outside AWS's driver buckets: the recursive copy
+  # lists and reads that prefix only.
+  {% for mirror in context.arns.gpu_driver_mirrors %}
+  - Action: s3:GetObject
+    Resource: '{{ mirror.objects }}'
+    Effect: Allow
+  - Action: s3:ListBucket
+    Resource: '{{ mirror.bucket }}'
+    Condition:
+      StringLike:
+        s3:prefix: '{{ mirror.prefix }}'
+    Effect: Allow
+  {% endfor %}
+
+  # From the cluster bucket a host reads only its bootstrap package: a desktop's, a desktop image
+  # builder's, or a compute node's when a project role runs one. The rest of the bucket (scheduler
+  # logs, accounting) is not readable from a desktop. A host fetches one key it is given, so it
+  # holds no listing of the prefix, which would name every other desktop's package.
   - Action:
       - s3:GetObject
-      - s3:ListBucket
     Resource:
-      {{ context.utils.to_yaml(context.arns.s3_bucket_arns) | indent(6) }}
+      - '{{ context.arns.get_arn("s3", bucket + "/idea/" + vdc + "/dcv-host-bootstrap/*", aws_account_id="", aws_region="") }}'
+      - '{{ context.arns.get_arn("s3", bucket + "/idea/" + vdc + "/bootstrap/*", aws_account_id="", aws_region="") }}'
+      {%- if scheduler %}
+      - '{{ context.arns.get_arn("s3", bucket + "/idea/" + scheduler + "/bootstrap/*", aws_account_id="", aws_region="") }}'
+      {%- endif %}
     Effect: Allow
 
   - Action:
@@ -29,39 +63,50 @@ Statement:
       {{ context.utils.to_yaml(context.arns.dcv_license_s3_bucket_arns) | indent(6) }}
     Effect: Allow
 
+  # A desktop reports its reboot and its readiness to the controller; it never reads the queue.
   - Effect: Allow
     Action:
-      - sqs:DeleteMessage
-      - sqs:ReceiveMessage
       - sqs:SendMessage
-      - sqs:GetQueueAttributes
-      - sqs:ChangeMessageVisibility
-      - sqs:GetQueueUrl
     Resource:
       - '{{ context.arns.get_sqs_arn(context.config.get_module_id("virtual-desktop-controller") + "-events.fifo") }}'
 
+  # Bootstrap copies the cluster, module and job tags (and the cluster's custom tags) onto the
+  # host's own volumes and network interfaces, which are untagged or carry this cluster's name. IAM
+  # cannot tell which volume is attached to the caller, so a volume or interface that names another
+  # cluster is refused; launch-time tagging is what removes this grant.
   - Action:
       - ec2:CreateTags
     Resource:
-      - '{{ context.arns.get_arn("ec2", "volume/*", aws_region="*") }}'
-      - '{{ context.arns.get_arn("ec2", "network-interface/*", aws_region="*") }}'
-      - '{{ context.arns.get_arn("ec2", "instance/*", aws_region="*") }}'
+      - '{{ context.arns.get_arn("ec2", "volume/*") }}'
+      - '{{ context.arns.get_arn("ec2", "network-interface/*") }}'
+    Condition:
+      StringEqualsIfExists:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+    Effect: Allow
+
+  # On an instance a host writes only its own bootstrap or image build status; the identity tags
+  # the product trusts are set at launch and cannot be changed from the host. IAM accepts a policy
+  # variable only after the ARN's fifth colon, so the instance is matched in the condition: the
+  # tagged instance's ARN must be the one the calling credentials were issued to.
+  - Action:
+      - ec2:CreateTags
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      ArnEquals:
+        ec2:SourceInstanceARN: '{{ context.arns.get_arn("ec2", "instance/${ec2:InstanceID}") }}'
+      ForAllValues:StringEquals:
+        aws:TagKeys:
+          - idea:BootstrapStatus
+          - idea:BootstrapDetail
+          - idea:AmiBuilderStatus
     Effect: Allow
 
   - Action:
       - ec2:DescribeVolumes
       - ec2:DescribeNetworkInterfaces
       - ec2:DescribeInstanceTypes
-      - fsx:CreateDataRepositoryTask
       - fsx:DescribeFileSystems
       - tag:GetResources
-      - tag:GetTagValues
-      - tag:GetTagKeys
-    Resource: '*'
-    Effect: Allow
-
-  - Action:
-      - logs:PutRetentionPolicy
     Resource: '*'
     Effect: Allow
 

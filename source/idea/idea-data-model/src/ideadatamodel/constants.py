@@ -130,6 +130,8 @@ IDEA_TAG_NAME = 'Name'
 IDEA_TAG_JOB_ID = IDEA_TAG_PREFIX + 'JobId'
 IDEA_TAG_JOB_GROUP = IDEA_TAG_PREFIX + 'JobGroup'
 IDEA_TAG_CAPACITY_SIGNATURE = IDEA_TAG_PREFIX + 'CapacitySignature'
+# the instance profile a persistent (keep forever) pool's nodes run under
+IDEA_TAG_INSTANCE_PROFILE = IDEA_TAG_PREFIX + 'InstanceProfile'
 IDEA_TAG_JOB_NAME = IDEA_TAG_PREFIX + 'JobName'
 IDEA_TAG_JOB_OWNER = IDEA_TAG_PREFIX + 'JobOwner'
 IDEA_TAG_JOB_OWNER_EMAIL = IDEA_TAG_PREFIX + 'JobOwnerEmail'

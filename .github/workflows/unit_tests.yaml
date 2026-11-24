@@ -18,8 +18,47 @@ jobs:
       matrix:
         suite: [data-model, sdk, cluster-manager, scheduler, virtual-desktop-controller, web-portal]
     runs-on: ubuntu-large
+    env:
+      # The suites whose tests parse Windows scripts with pwsh, and fail without it on CI.
+      NEEDS_POWERSHELL: ${{ contains(fromJSON('["sdk", "virtual-desktop-controller"]'), matrix.suite) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install PowerShell
+        # The NEEDS_POWERSHELL suites parse Windows scripts with pwsh and fail without it on CI. The
+        # ubuntu-large image is not documented, so this pinned, checksum-verified release is used
+        # whatever the runner carries. Renovate proposes the version; its PR takes both Linux lines
+        # of that release's hashes.sha256, or this step fails.
+        if: env.NEEDS_POWERSHELL == 'true'
+        env:
+          # renovate: datasource=github-releases depName=PowerShell/PowerShell
+          POWERSHELL_VERSION: 7.6.10
+          POWERSHELL_SHA256_X64: e261cabc91c78a9afe8d1e5f24731ab0d38204735ab2ec94b0af55102652e10d
+          POWERSHELL_SHA256_ARM64: 439432cdecf4418413b9a8f547e3ab4d9b40e8e4258913ec3d15fc92c67a9235
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) ARCH=x64; SHA256=$POWERSHELL_SHA256_X64 ;;
+            aarch64) ARCH=arm64; SHA256=$POWERSHELL_SHA256_ARM64 ;;
+            *) echo "::error::No pinned PowerShell for $(uname -m)."; exit 1 ;;
+          esac
+          ARCHIVE="${RUNNER_TEMP}/powershell.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 --retry-all-errors -o "$ARCHIVE" \
+            "https://github.com/PowerShell/PowerShell/releases/download/v${POWERSHELL_VERSION}/powershell-${POWERSHELL_VERSION}-linux-${ARCH}.tar.gz"
+          echo "${SHA256}  ${ARCHIVE}" | sha256sum --check -
+          mkdir -p "${RUNNER_TEMP}/powershell"
+          tar -xzf "$ARCHIVE" -C "${RUNNER_TEMP}/powershell"
+          chmod +x "${RUNNER_TEMP}/powershell/pwsh"
+          echo "${RUNNER_TEMP}/powershell" >> "$GITHUB_PATH"
+      - name: Check PowerShell
+        if: env.NEEDS_POWERSHELL == 'true'
+        run: |
+          if ! command -v pwsh > /dev/null; then
+            echo "::error::pwsh is not on PATH; the ${{ matrix.suite }} suite requires PowerShell 7 on CI."
+            exit 1
+          fi
+          VERSION=$(pwsh --version)
+          echo "$VERSION"
+          case "$VERSION" in "PowerShell 7."*) ;; *) echo "::error::The ${{ matrix.suite }} suite needs PowerShell 7, not '${VERSION}'."; exit 1 ;; esac
       - name: Setup Development Environment
         uses: ./.github/actions/setup_dev_environment
       - name: Run ${{ matrix.suite }} tests

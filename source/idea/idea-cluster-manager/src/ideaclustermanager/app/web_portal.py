@@ -14,16 +14,41 @@ import ideaclustermanager.app.app_messages as app_messages
 
 from ideasdk.utils import Utils, EnvironmentUtils, Jinja2Utils, ModuleMetadataHelper
 from ideasdk.server import SocaServer
-from ideadatamodel import exceptions, constants
+from ideadatamodel import errorcodes, exceptions, constants
 
+import asyncio
+import hmac
 import os
+import re
+import secrets
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sanic
-from typing import Dict
+from typing import Dict, Optional
 from datetime import datetime
 
 
+# any key S3 holds, without control characters, ending in an image extension of any case
+LOGO_KEY_PATTERN = r'[^\x00-\x1f\x7f\\]+\.(png|jpe?g|gif|svg|webp)'
+
+
 class WebPortal:
+    # Holds a random key for the sign-in this browser started. The state row keeps only
+    # its hash, the callback stores tokens only for the browser holding it, and the page
+    # hands the code that redeems them only to that browser. One cookie per sign-in,
+    # named after its state, so sign-ins in two tabs do not replace each other's key.
+    # Sent as __Host-<name>: host-only, so no other host under the domain can set it.
+    SSO_BROWSER_COOKIE = 'idea-sso'
+    # The sign-in routes need no account and wait on DynamoDB and the user pool: that
+    # work runs on these threads, never on the loop that serves every request, and a
+    # request past this many waiting is refused at once.
+    SSO_WORKERS = 4
+    SSO_PENDING = 32
+    # sign-in cookies one browser keeps: starting another clears the oldest, so
+    # abandoned sign-ins cannot grow the request header past the server's limit
+    SSO_SIGN_INS_KEPT = 4
+
     def __init__(self, context: ideaclustermanager.AppContext, server: SocaServer):
         self.context = context
         self.server = server
@@ -39,6 +64,43 @@ class WebPortal:
         self.web_template_env = Jinja2Utils.env_using_file_system_loader(
             search_path=self.web_app_dir, auto_escape=True
         )
+        self._sso_executor = ThreadPoolExecutor(
+            max_workers=self.SSO_WORKERS, thread_name_prefix='web-portal-sso'
+        )
+        self._sso_pending = threading.BoundedSemaphore(self.SSO_PENDING)
+
+    @classmethod
+    def sso_cookie_name(cls, state: str) -> Optional[str]:
+        # a state is a uuid; anything else names no cookie this server set
+        if not isinstance(state, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,64}', state):
+            return None
+        return f'{cls.SSO_BROWSER_COOKIE}-{state}'
+
+    @classmethod
+    def sso_browser_key(cls, http_request, state: str) -> str:
+        name = cls.sso_cookie_name(state)
+        if name is None:
+            return ''
+        return cls._host_cookie(http_request, name)
+
+    @staticmethod
+    def _host_cookie(http_request, name: str) -> str:
+        # the exact __Host- name only: an unprefixed cookie, or the framework's fallback
+        # to a __Secure- one, can come from another host under the domain
+        value = dict.get(http_request.cookies, f'__Host-{name}')
+        if isinstance(value, list):
+            value = value[0] if value else None
+        return value or ''
+
+    async def _off_loop(self, fn, *args):
+        if not self._sso_pending.acquire(blocking=False):
+            raise exceptions.general_exception('single sign-on is busy')
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                self._sso_executor, fn, *args
+            )
+        finally:
+            self._sso_pending.release()
 
     @staticmethod
     def is_dev_mode() -> bool:
@@ -68,12 +130,14 @@ class WebPortal:
             if logo.startswith('https://') or logo.startswith('/'):
                 return logo
 
-            # assume logo is Key of the logo image file in cluster's s3 bucket.
-            # create a pre-signed url and return
-            return self.context.aws_util().create_s3_presigned_url(
-                key=logo,
-                expires_in=12 * 60 * 60,  # 12 hours
-            )
+            # a key of an image in the cluster's bucket: the sign-in page is served
+            # without authentication, so no other object is signed for it
+            if re.fullmatch(LOGO_KEY_PATTERN, logo, re.IGNORECASE) and '..' not in logo:
+                return self.context.aws_util().create_s3_presigned_url(
+                    key=logo,
+                    expires_in=12 * 60 * 60,  # 12 hours
+                )
+            self.logger.warning('web_portal.logo is not an image key: default logo')
 
         return self.make_route_path(
             '/logo.png'
@@ -102,8 +166,10 @@ class WebPortal:
         )
         modules = []
         module_set = self.context.config().get_config(
-            f'global-settings.module_sets.{module_set_id}'
+            f'global-settings.module_sets.{module_set_id}', default=None
         )
+        if not module_set:
+            raise exceptions.invalid_params('unknown module set')
         for module_name in module_set:
             module_metadata = self.module_metadata_helper.get_module_metadata(
                 module_name
@@ -176,24 +242,42 @@ class WebPortal:
             sso_auth_code = self.server.get_query_param_as_string(
                 'sso_auth_code', http_request
             )
-            if Utils.is_not_empty(sso_auth_code):
-                app_init_data['sso_auth_code'] = sso_auth_code
+            # only the cookie of the sign-in this code belongs to: a stale code finds
+            # none and leaves a sign-in in progress alone
+            browser_key = self.sso_browser_key(http_request, sso_auth_code)
+            if Utils.is_not_empty(sso_auth_code) and Utils.is_not_empty(browser_key):
+                app_init_data['sso_auth_code'] = f'{sso_auth_code}.{browser_key}'
 
         return app_init_data
 
     async def index_route(self, http_request):
         template = self.web_template_env.get_template('index.html')
-        app_init_data = self.build_app_init_data(http_request)
+        try:
+            app_init_data = self.build_app_init_data(http_request)
+        except exceptions.SocaException as error:
+            if error.error_code != errorcodes.INVALID_PARAMS:
+                raise
+            return sanic.response.text('unknown module set', status=400)
         result = template.render(
             app_init_data=Utils.base64_encode(Utils.to_json(app_init_data))
         )
 
         # add X-Frame-Options header to mitigate ClickJacking (embedding WebPortal within an iframe)
-        return sanic.response.html(
+        response = sanic.response.html(
             body=result, status=200, headers={'X-Frame-Options': 'SAMEORIGIN'}
         )
+        if 'sso_auth_code' in app_init_data:
+            # the page carries a one-time code: no cache keeps it
+            response.headers['Cache-Control'] = 'no-store'
+            # the page now holds the key: this sign-in's cookie has done its work
+            response.delete_cookie(
+                self.sso_cookie_name(app_init_data['sso_auth_code'].partition('.')[0]),
+                path='/',
+                host_prefix=True,
+            )
+        return response
 
-    async def sso_initiate_route(self, _):
+    async def sso_initiate_route(self, http_request):
         sso_enabled = self.context.config().get_bool(
             'identity-provider.cognito.sso_enabled', False
         )
@@ -226,13 +310,45 @@ class WebPortal:
             ]
             authorization_url = f'{domain_url}/authorize?{"&".join(query_params)}'
 
-            # todo - add throttling to prevent ddb flooding from malicious actors and code
-            self.context.accounts.sso_state_dao.create_sso_state(
-                {'state': state, 'redirect_uri': redirect_uri}
+            browser_key = secrets.token_urlsafe(32)
+
+            sso_state_dao = self.context.accounts.sso_state_dao
+            await self._off_loop(
+                sso_state_dao.create_sso_state,
+                {
+                    'state': state,
+                    'redirect_uri': redirect_uri,
+                    'browser_key_hash': Utils.sha256(browser_key),
+                },
             )
 
             self.logger.debug(f'redirecting: {authorization_url}')
-            return sanic.response.redirect(authorization_url)
+            response = sanic.response.redirect(authorization_url)
+            # Lax: the identity provider's redirect back is a top-level navigation
+            response.add_cookie(
+                self.sso_cookie_name(state),
+                browser_key,
+                path='/',
+                secure=True,
+                httponly=True,
+                samesite='Lax',
+                max_age=sso_state_dao.STATE_SECONDS,
+                host_prefix=True,
+            )
+            prefix = f'__Host-{self.SSO_BROWSER_COOKIE}-'
+            held = (
+                []
+                if http_request is None
+                else [
+                    k for k in dict.keys(http_request.cookies) if k.startswith(prefix)
+                ]
+            )
+            # a browser sends cookies of one path oldest first (RFC 6265 5.4)
+            for key in held[: max(0, len(held) - (self.SSO_SIGN_INS_KEPT - 1))]:
+                response.delete_cookie(
+                    key[len('__Host-') :], path='/', host_prefix=True
+                )
+            return response
         except Exception as e:
             self.logger.exception(f'failed to initiate sso: {e}')
             return sanic.response.redirect(
@@ -257,8 +373,10 @@ class WebPortal:
             )
 
             if Utils.is_not_empty(error):
+                # the provider's text, quoted and bounded
                 self.logger.warning(
-                    f'sso auth failure: error={error}, error_description={error_description}'
+                    f'sso auth failure: error={error[:200]!r}, '
+                    f'error_description={(error_description or "")[:500]!r}'
                 )
                 return sanic.response.redirect(
                     f'{self.web_resources_context_path}?sso_auth_status=FAIL'
@@ -268,77 +386,88 @@ class WebPortal:
                 raise exceptions.invalid_params('code is required')
             if Utils.is_empty(state):
                 raise exceptions.invalid_params('state is required')
-
-            self.logger.debug(
-                f'sso callback: authorization_code={authorization_code}, state={state}'
-            )
-
-            # todo - add throttling to prevent ddb flooding from malicious actors and code
-            sso_state = self.context.accounts.sso_state_dao.get_sso_state(state=state)
-            if sso_state is None:
-                raise exceptions.invalid_params(
-                    f'sso state not found for state: {state}'
-                )
-
-            auth_result = (
-                self.context.token_service.get_access_token_using_sso_auth_code(
-                    authorization_code=authorization_code,
-                    redirect_uri=sso_state['redirect_uri'],
-                )
-            )
-
-            # decode the access token and check if the username matches to the user that exists in DB
-            claims = self.context.token_service.decode_token(auth_result.access_token)
-            self.logger.info(f'sso token claims: {Utils.to_json(claims)}')
-
-            username = Utils.get_value_as_string('username', claims)
-            self.logger.debug(f'Cognito SSO claims - Username: {username}')
-
-            if Utils.is_empty(username):
-                self.logger.exception(
-                    f'Error - Unable to read IdP username from claims: {claims}'
-                )
+            browser_key = self.sso_browser_key(http_request, state)
+            if Utils.is_empty(browser_key):
+                # no sign-in this browser started: nothing to look up
                 return sanic.response.redirect(
                     f'{self.web_resources_context_path}?sso_auth_status=FAIL'
                 )
 
-            self.logger.debug(f'SSO auth: Looking up user: {username}')
-            existing_user = self.context.accounts.user_dao.get_user(username=username)
-
-            if existing_user is None:
-                self.logger.warning(
-                    f'SSO auth: {username} is not previously known. User must be created before first SSO attempt'
-                )
-                # TODO auto-enrollment would go here
-                self.logger.info(f'SSO auth: Unable to process {username}')
-                self.logger.info(f'disabling federated user in user pool: {username}')
-                self.context.user_pool.admin_disable_user(username=username)
-                self.logger.info(f'deleting federated user in user pool: {username}')
-                self.context.user_pool.admin_delete_user(username=username)
-                return sanic.response.redirect(
-                    f'{self.web_resources_context_path}?sso_auth_status=FAIL'
-                )
-
-            self.logger.debug(f'Updating SSO State for user {username}: {state}')
-            self.context.accounts.sso_state_dao.update_sso_state(
-                {
-                    'state': state,
-                    'access_token': auth_result.access_token,
-                    'refresh_token': auth_result.refresh_token,
-                    'expires_in': auth_result.expires_in,
-                    'id_token': auth_result.id_token,
-                    'token_type': auth_result.token_type,
-                }
+            location = await self._off_loop(
+                self._finish_sso,
+                authorization_code,
+                state,
+                browser_key,
             )
-            return sanic.response.redirect(
-                f'{self.web_resources_context_path}?sso_auth_status=SUCCESS&sso_auth_code={state}'
-            )
+            return sanic.response.redirect(location)
 
         except Exception as e:
             self.logger.exception(f'failed to process sso oauth2 callback: {e}')
             return sanic.response.redirect(
                 f'{self.web_resources_context_path}?sso_auth_status=FAIL'
             )
+
+    def _finish_sso(self, authorization_code: str, state: str, browser_key: str) -> str:
+        """
+        the callback's DynamoDB and user pool work, on the sign-in threads
+        :return: where the browser goes next
+        """
+        failed = f'{self.web_resources_context_path}?sso_auth_status=FAIL'
+
+        sso_state = self.context.accounts.sso_state_dao.get_sso_state(state=state)
+        # only the browser that started this sign-in may finish it
+        if sso_state is None or not hmac.compare_digest(
+            Utils.sha256(browser_key),
+            Utils.get_value_as_string('browser_key_hash', sso_state, ''),
+        ):
+            raise exceptions.invalid_params(
+                f'sso state not found for this browser: {state}'
+            )
+
+        auth_result = self.context.token_service.get_access_token_using_sso_auth_code(
+            authorization_code=authorization_code,
+            redirect_uri=sso_state['redirect_uri'],
+        )
+
+        # decode the access token and check if the username matches to the user that exists in DB
+        claims = self.context.token_service.decode_token(auth_result.access_token)
+        # the username only: neither the sign-in code nor the claims go to the log
+        username = Utils.get_value_as_string('username', claims)
+        self.logger.info(f'sso sign-in: username={username}')
+
+        if Utils.is_empty(username):
+            self.logger.error('sso sign-in: no username in the token')
+            return failed
+
+        self.logger.debug(f'SSO auth: Looking up user: {username}')
+        existing_user = self.context.accounts.user_dao.get_user(username=username)
+
+        if existing_user is None:
+            self.logger.warning(
+                f'SSO auth: {username} is not previously known. User must be created before first SSO attempt'
+            )
+            self.logger.info(f'disabling federated user in user pool: {username}')
+            self.context.user_pool.admin_disable_user(username=username)
+            self.logger.info(f'deleting federated user in user pool: {username}')
+            self.context.user_pool.admin_delete_user(username=username)
+            return failed
+        if not Utils.get_value_as_bool('enabled', existing_user, False):
+            # disabled here though the user pool may not have caught up yet
+            self.logger.warning(f'SSO auth: {username} is disabled')
+            return failed
+
+        self.logger.debug(f'Updating SSO state for user {username}')
+        self.context.accounts.sso_state_dao.update_sso_state(
+            {
+                'state': state,
+                'access_token': auth_result.access_token,
+                'refresh_token': auth_result.refresh_token,
+                'expires_in': auth_result.expires_in,
+                'id_token': auth_result.id_token,
+                'token_type': auth_result.token_type,
+            }
+        )
+        return f'{self.web_resources_context_path}?sso_auth_status=SUCCESS&sso_auth_code={state}'
 
     def make_route_path(self, path: str) -> str:
         if not path.startswith('/'):
@@ -350,6 +479,11 @@ class WebPortal:
         # index route
         self.server.http_app.add_route(
             self.index_route, self.web_resources_context_path, name='index'
+        )
+        # the page's own file too, so it carries the same frame protection; a fixed
+        # route is matched before the static one below
+        self.server.http_app.add_route(
+            self.index_route, self.make_route_path('/index.html'), name='index_html'
         )
         # sso route
         self.server.http_app.add_route(

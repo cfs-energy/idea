@@ -5,13 +5,14 @@ Statement:
       - cloudwatch:PutMetricData
       - ec2:DescribeVolumes
       - ec2:DescribeTags
-      - logs:PutLogEvents
       - logs:DescribeLogStreams
       - logs:DescribeLogGroups
-      - logs:CreateLogStream
-      - logs:CreateLogGroup
     Resource: '*'
+  # Every host and task that carries this policy writes its logs under /<cluster>/; groups outside
+  # the cluster's tree are not theirs to create or write.
   - Effect: Allow
     Action:
-      - ssm:GetParameter
-    Resource: '{{ context.arns.get_arn("ssm", "parameter/AmazonCloudWatch-*", aws_region="*") }}'
+      - logs:PutLogEvents
+      - logs:CreateLogStream
+      - logs:CreateLogGroup
+    Resource: '{{ context.arns.get_log_group_arn("/*") }}'

@@ -108,6 +108,22 @@ def test_a_linux_builder_launch_keeps_the_key():
     assert _launch_kwargs('amazonlinux2023')['KeyName'] == 'idea_test'
 
 
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'windows2022'])
+def test_a_builder_root_is_gp3_with_provisioned_iops(base_os):
+    # the Windows vendor image is gp2: the builder sets gp3 explicitly for both
+    assert _launch_kwargs(base_os)['BlockDeviceMappings'] == [
+        {
+            'DeviceName': '/dev/xvda',
+            'Ebs': {
+                'VolumeSize': 20,
+                'VolumeType': 'gp3',
+                'Iops': 10000,
+                'Throughput': 1000,
+            },
+        }
+    ]
+
+
 def _builder_for_root(volume_gb, ebs_volume_size=None):
     context = fake_context()
     context.aws().ec2().describe_images.return_value = {
@@ -490,3 +506,48 @@ def test_userdata_failure_does_not_wait_for_uninstalled_image_checks(stage):
     with pytest.raises(exceptions.SocaException, match=f'userdata-{stage}'):
         builder.check_builder_status('i-builder', f'failed:userdata-{stage}')
     builder.before_snapshot.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'code, launched',
+    [
+        ('VcpuLimitExceeded', ['c7i.2xlarge', 'm7i.large']),
+        ('InsufficientInstanceCapacity', ['c7i.2xlarge', 'm7i.large']),
+        ('InvalidParameterValue', ['c7i.2xlarge']),
+    ],
+)
+def test_a_refused_builder_launches_once_on_its_fallback(code, launched):
+    from botocore.exceptions import ClientError
+
+    context = fake_context()
+    tried = []
+
+    def run_instances(**kwargs):
+        tried.append(kwargs['InstanceType'])
+        if len(tried) == 1:
+            raise ClientError(
+                {'Error': {'Code': code, 'Message': code}}, 'RunInstances'
+            )
+        return {'Instances': [{'InstanceId': 'i-builder'}]}
+
+    context.aws().ec2().run_instances.side_effect = run_instances
+    builder = DcvHostImageBuilder(
+        context=context,
+        base_ami='ami-base',
+        base_os='rocky9',
+        instance_type='c7i.2xlarge',
+        fallback_instance_type='m7i.large',
+    )
+    builder.build_userdata = lambda: 'userdata'
+    if len(launched) == 1:
+        with pytest.raises(ClientError):
+            builder.launch_ec2_instance()
+    else:
+        builder.launch_ec2_instance()
+        assert builder.launch_update('i-builder') == {
+            'instance_id': 'i-builder',
+            'builder_instance_type': 'm7i.large',
+            'builder_fallback': f'c7i.2xlarge was refused ({code}); '
+            'this bake launched once on m7i.large',
+        }
+    assert tried == launched

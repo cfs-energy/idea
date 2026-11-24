@@ -13,6 +13,7 @@ from ideadatamodel import (
     Project,
     SocaComputeNode,
     SocaJob,
+    SocaJobState,
     SubmitJobResult,
     User,
     exceptions,
@@ -27,10 +28,31 @@ from ideascheduler.app.api.scheduler_api import SchedulerAPI
 from test_compute_image_pipeline import service, row
 
 
+@pytest.fixture(autouse=True)
+def home_present(monkeypatch):
+    """the canary paths here use a home that is not on this machine"""
+    real = module.wait_for_home
+    monkeypatch.setattr(module, 'wait_for_home', lambda home: None)
+    # each test probes the home afresh
+    module._home_probes.clear()
+    return real
+
+
 @pytest.mark.parametrize('maintenance', [False, True])
 @pytest.mark.parametrize(
     'failure',
-    [None, 'ami', 'mount', 'output', 'exit', 'timeout', 'pbs', 'identity', 'cleanup'],
+    [
+        None,
+        'ami',
+        'mount',
+        'output',
+        'unreadable',
+        'exit',
+        'timeout',
+        'pbs',
+        'identity',
+        'cleanup',
+    ],
 )
 def test_canary_uses_validation_identity_and_requires_every_check(
     context, monkeypatch, failure, maintenance
@@ -164,6 +186,14 @@ def test_canary_uses_validation_identity_and_requires_every_check(
         ],
     }
     monkeypatch.setattr(Path, 'read_text', lambda self: json.dumps(evidence))
+    if failure == 'unreadable':
+        # the output never reads back; the clock runs on until the ready gate passes
+        def unreadable(self):
+            raise OSError('no such file')
+
+        monkeypatch.setattr(Path, 'read_text', unreadable)
+        clock = iter(range(10**6))
+        monkeypatch.setattr(module.time, 'monotonic', lambda: next(clock))
     monkeypatch.setattr(Path, 'unlink', lambda *args, **kwargs: None)
     candidate = row(image_id='ami-candidate')
 
@@ -175,6 +205,18 @@ def test_canary_uses_validation_identity_and_requires_every_check(
         with pytest.raises(exceptions.SocaException):
             ComputeImageCanary(context).validate(candidate, progress)
         assert any(check.ok is False for check in candidate.checks)
+        failed = next(check for check in candidate.checks if check.ok is False)
+        if failure == 'timeout':
+            # no node had launched: the environment, said so
+            assert failed.name == 'compute_timeout'
+            assert failed.detail.startswith(
+                'No node was launched for the validation job within 0 seconds.'
+            )
+            assert 'not the image' in failed.detail
+        if failure == 'unreadable':
+            assert failed.name == 'compute_output'
+            assert 'could not be read within 300 seconds' in failed.detail
+            assert 'the environment' in failed.detail
     else:
         ComputeImageCanary(context).validate(candidate, progress)
         assert all(check.ok is True for check in candidate.checks)
@@ -474,6 +516,64 @@ def test_cleanup_deletes_a_stuck_job_and_reports_what_stayed(monkeypatch):
     assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
 
 
+def test_cleanup_asks_for_the_queue_only_once_its_node_has_left_pbs(monkeypatch):
+    """
+    PBS answers busy while a node belongs to the queue, a minute or two after the job. each
+    refused delete is two error lines: 24 to 50 for every canary that passed.
+    """
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = False
+    node = SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')
+    other = SocaComputeNode(host='ip-10-0-0-2', queue='normal')
+    context.scheduler.list_nodes.side_effect = [[node, other]] * 20 + [[other]]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    )
+    assert errors == []
+    context.queue_profiles.delete_queue_profile.assert_called_once_with(
+        queue_profile_id='q'
+    )
+    assert module.time.monotonic() == 100
+
+
+def test_cleanup_names_a_node_that_never_left(monkeypatch):
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = False
+    context.scheduler.list_nodes.return_value = [
+        SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')
+    ]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    )
+    assert errors == ['The validation queue iv-abc still has a node in PBS.']
+    context.queue_profiles.delete_queue_profile.assert_not_called()
+    assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
+
+
+@pytest.mark.parametrize('node', [True, False])
+def test_the_sweeps_reap_never_waits(monkeypatch, node):
+    """the leader's tick runs it, and the same thread enforces the bake time limit"""
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.list_jobs.return_value = [SimpleNamespace(job_id='12')]
+    context.scheduler.is_job_active.return_value = True
+    context.scheduler.list_nodes.return_value = (
+        [SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')] if node else []
+    )
+    busy = exceptions.soca_exception(module.errorcodes.SCHEDULER_QUEUE_BUSY, 'busy')
+    context.queue_profiles.delete_queue_profile.side_effect = busy
+    profile = SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    errors = ComputeImageCanary(context).reap(profile, patience=0)
+    assert module.time.monotonic() == 0
+    context.scheduler.delete_job.assert_called_once_with('12')
+    assert any('did not leave PBS' in e for e in errors)
+    # one try at most, and none while PBS is sure to refuse
+    assert context.queue_profiles.delete_queue_profile.call_count == (0 if node else 1)
+    assert len(errors) == 2
+
+
 def _resolver(monkeypatch, lookups, uid=5062):
     """this host's passwd and group as the user sync leaves them, one answer per poll"""
     from ideasdk.aws import validation_identity
@@ -565,3 +665,248 @@ def test_a_stale_project_description_is_brought_up_to_date(monkeypatch):
     # only the description: an update with other fields would rewrite them
     assert update.ldap_groups is None and update.enable_budgets is None
     assert project.description == VALIDATION_PROJECT_DESCRIPTION
+
+
+def test_a_hung_shared_home_fails_the_canary_before_it_creates_anything(monkeypatch):
+    svc = service()
+    context = svc.context
+    context.config().values.update(
+        {
+            module.PIPELINE_SETTINGS: {},
+            'shared-storage.data.mount_dir': '/data',
+            'shared-storage': {'data': {'mount_dir': '/data', 'scope': ['cluster']}},
+        }
+    )
+    monkeypatch.setattr(
+        module, 'ensure_validation_identity', lambda *a: Mock(project_id='p')
+    )
+    monkeypatch.setattr(module, 'wait_for_local_user', lambda *a: None)
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: False)
+    source = Mock(default_job_params=None)
+    source.name = 'compute'
+    context.queue_profiles.list_queue_profiles.return_value = [source]
+    context.queue_profiles.create_queue_profile = Mock()
+    monkeypatch.setattr(module.ComputeImageCanary, '_source_profile', lambda *a: source)
+    canary = module.ComputeImageCanary(context)
+    record = row(status='test_launching', image_id='ami-candidate')
+    with pytest.raises(exceptions.SocaException) as raised:
+        canary.validate(record, Mock())
+    assert '/data/home/idea-validate did not answer' in raised.value.message
+    context.queue_profiles.create_queue_profile.assert_not_called()
+
+
+def test_a_node_that_never_registered_is_found_by_its_job_tag_and_read(monkeypatch):
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {
+        'Reservations': [{'Instances': [{'InstanceId': 'i-node'}]}]
+    }
+    context = Mock()
+    context.aws.return_value.ec2.return_value = ec2
+    context.cluster_name.return_value = 'c'
+    seen = []
+    monkeypatch.setattr(
+        module,
+        'capture_failure',
+        lambda ctx, logger, host: seen.append(host) or 'Likely cause: x.',
+    )
+    canary = ComputeImageCanary(svc.context)
+    canary.context = context
+    cause = canary._capture_failed_node(
+        row(image_id='ami-candidate', release='26.11.2'),
+        'job-7',
+        None,
+        exceptions.general_exception('The validation job timed out before completion.'),
+    )
+    assert cause == 'Likely cause: x.'
+    assert seen[0].instance_id == 'i-node' and seen[0].ami == 'ami-candidate'
+    assert seen[0].kind == 'compute_bake' and seen[0].log_group is None
+    filters = ec2.describe_instances.call_args.kwargs['Filters']
+    assert {'Name': 'tag:idea:JobId', 'Values': ['job-7']} in filters
+    assert {'Name': 'tag:idea:ClusterName', 'Values': ['c']} in filters
+
+
+def test_the_canary_waits_for_a_new_users_home_and_then_goes_on(
+    home_present, monkeypatch, tmp_path
+):
+    home = tmp_path / 'home' / 'image-test'
+    waits = []
+
+    def sleep(_seconds):
+        waits.append(_seconds)
+        home.mkdir(parents=True)
+
+    monkeypatch.setattr(module.time, 'sleep', sleep)
+    home_present(home)
+    assert len(waits) == 1
+
+
+def test_the_canary_fails_plainly_when_the_home_is_never_created(
+    home_present, monkeypatch, tmp_path
+):
+    clock = iter(range(0, 10000, 10))
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(module.time, 'sleep', lambda _s: None)
+    with pytest.raises(exceptions.SocaException) as raised:
+        home_present(tmp_path / 'missing', timeout_seconds=30)
+    assert 'was not created within 30 seconds' in raised.value.message
+
+
+def test_waiting_for_the_home_stops_when_the_mount_stops_answering(
+    monkeypatch, tmp_path, home_present
+):
+    # R4-35: is_dir() on a hard mount that stopped answering blocked past the deadline
+    answers = iter([True, False])
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: next(answers))
+    monkeypatch.setattr(module.time, 'sleep', lambda _s: None)
+    with pytest.raises(exceptions.SocaException) as raised:
+        home_present(tmp_path / 'missing-home', timeout_seconds=120)
+    assert 'did not answer within 60 seconds' in raised.value.message
+
+
+def test_waiting_for_the_home_returns_once_it_exists(
+    monkeypatch, tmp_path, home_present
+):
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
+    home_present(tmp_path)
+
+
+def test_a_home_check_that_never_returns_fails_the_validation_within_the_limit(
+    monkeypatch, tmp_path, home_present
+):
+    # the probe answered, then the mount stopped: is_dir() never returns
+    import threading
+    import time as _time
+    from pathlib import Path
+
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
+    never = threading.Event()
+    monkeypatch.setattr(Path, 'is_dir', lambda self: never.wait(5))
+    started = _time.monotonic()
+    with pytest.raises(exceptions.SocaException) as raised:
+        home_present(tmp_path / 'home', timeout_seconds=0.3)
+    assert _time.monotonic() - started < 2
+    assert f'The home directory {tmp_path / "home"} did not answer' in (
+        raised.value.message
+    )
+    never.set()
+
+
+def _job(state, error_message=None):
+    return SocaJob(job_id='1', state=state, error_message=error_message)
+
+
+@pytest.mark.parametrize(
+    'last_job, node, instance, expected, cause',
+    [
+        (
+            _job(SocaJobState.QUEUED, 'no capacity for c7i.large'),
+            None,
+            None,
+            'the scheduler reported "no capacity for c7i.large"',
+            'the environment',
+        ),
+        (
+            _job(SocaJobState.QUEUED),
+            None,
+            None,
+            'No node was launched',
+            'the environment',
+        ),
+        (
+            SocaJob(
+                job_id='1',
+                state=SocaJobState.QUEUED,
+                comment='Job held: max_provisioned_instances limit',
+            ),
+            None,
+            None,
+            'the scheduler reported "Job held: max_provisioned_instances limit"',
+            'the environment',
+        ),
+        (
+            SocaJob(
+                job_id='1',
+                state=SocaJobState.QUEUED,
+                comment='IDEA: provisioning compute capacity for this job',
+            ),
+            None,
+            None,
+            'seconds. This is the environment (scheduler provisioning or EC2)',
+            'not the image',
+        ),
+        (
+            _job(SocaJobState.QUEUED),
+            None,
+            'i-candidate',
+            'A node (i-candidate) launched on the candidate image but did not register',
+            'The image is the likely cause',
+        ),
+        (
+            _job(SocaJobState.RUNNING),
+            SocaComputeNode(host='10.0.0.7', instance_id='i-candidate'),
+            'i-candidate',
+            'started on 10.0.0.7 but did not finish within 600 seconds',
+            'the environment',
+        ),
+    ],
+    ids=[
+        'launch-refused',
+        'never-launched',
+        'refused-in-comment',
+        'own-wait-comment',
+        'never-registered',
+        'did-not-finish',
+    ],
+)
+def test_a_timed_out_validation_names_its_phase_and_the_likely_cause(
+    monkeypatch, last_job, node, instance, expected, cause
+):
+    svc = service()
+    monkeypatch.setattr(module, 'find_job_instance', lambda context, job_id: instance)
+    reason = ComputeImageCanary(svc.context)._timeout_reason('1', last_job, node, 600)
+    assert expected in reason and cause in reason
+    assert 'timed out before completion' not in reason
+
+
+def test_one_probe_of_the_home_serves_every_row(monkeypatch, tmp_path):
+    # a rebake validates its rows at once: a home that stopped answering is probed once
+    # and every row fails within that one probe, with the storage reason
+    import threading
+
+    probes = []
+    gate = threading.Event()
+
+    def probe(path, timeout):
+        probes.append(path)
+        gate.wait(1)
+        return False
+
+    monkeypatch.setattr(module, 'path_answers', probe)
+    module._home_probes.clear()
+    results = []
+    rows = [
+        threading.Thread(target=lambda: results.append(module.home_answers(tmp_path)))
+        for _ in range(5)
+    ]
+    for thread in rows:
+        thread.start()
+    gate.set()
+    for thread in rows:
+        thread.join(5)
+    assert results == [False] * 5
+    assert probes == [str(tmp_path)]
+
+
+def test_each_home_probe_and_each_reuse_is_logged(monkeypatch, tmp_path):
+    # D16: the shared probe wrote nothing, so its use could not be seen on a cluster
+    module._home_probes.clear()
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
+    logger = Mock()
+    assert module.home_answers(tmp_path, logger) is True
+    assert module.home_answers(tmp_path, logger) is True
+    lines = [call.args[0] for call in logger.info.call_args_list]
+    assert len(lines) == 2
+    assert lines[0].startswith(f'home probe {tmp_path}: answered in ')
+    assert lines[0].endswith(' seconds')
+    assert lines[1].startswith(f'home probe {tmp_path}: cached result used, answered ')

@@ -35,3 +35,12 @@ test('windows rejects infra config', () => {
     /infra config is not supported for windows/,
   );
 });
+
+test('windows user data stops on a failed download or extraction before any install command runs', () => {
+  const userdata = buildBootstrapUserData(cases.windows!);
+  const firstInstall = userdata.indexOf(cases.windows!.installCommands[0]!);
+  for (const guard of ["$ErrorActionPreference = 'Stop'", 'if ($LASTEXITCODE -ne 0) { throw', 'exit 1', 'Clear-ForeignBootstrap\n']) {
+    const at = userdata.indexOf(guard);
+    assert.ok(at >= 0 && at < firstInstall, `${guard} precedes the install commands`);
+  }
+});

@@ -17,6 +17,7 @@ import {
   renderMini,
   sparseContext,
   unpackLikeLinux,
+  unpackLikeWindows,
   withWorkdir,
 } from "./bootstrap-helpers.ts";
 
@@ -344,25 +345,23 @@ test("a missing optional openmpi URL fails on .split rather than baking an empty
   });
 });
 
-test("Windows Configure.ps1 fails the render when generate_password is absent from utils", () => {
+test("the Windows desktop package renders without password helpers and carries no password", () => {
+  // the desktop makes its local passwords at first boot: the package is built without them
   withWorkdir((workDirectory) => {
-    assert.throws(
-      () =>
-        buildComponent("virtual-desktop-host-windows", workDirectory, {
-          utils: {
-            to_json(value: unknown): string {
-              return JSON.stringify(value);
-            },
-            to_yaml(value: unknown): string {
-              return `${JSON.stringify(value)}\n`;
-            },
-          },
-        }),
-      (error: unknown) => {
-        assert.match(errorChain(error), /generate_password|Unable to call/i);
-        return true;
+    const archiveFile = buildComponent("virtual-desktop-host-windows", workDirectory, {
+      utils: {
+        to_json(value: unknown): string {
+          return JSON.stringify(value);
+        },
+        to_yaml(value: unknown): string {
+          return `${JSON.stringify(value)}\n`;
+        },
       },
-    );
+    });
+    const extracted = unpackLikeWindows(archiveFile, join(workDirectory, "win"));
+    const configure = readFileSync(join(extracted, "virtual-desktop-host-windows/Configure.ps1"), "utf8");
+    assert.match(configure, /\$LocalPasswordInput = New-LocalPassword -UserName \$LocalUser/);
+    assert.doesNotMatch(configure, /-Name "DefaultPassword" -PropertyType/);
   });
 });
 

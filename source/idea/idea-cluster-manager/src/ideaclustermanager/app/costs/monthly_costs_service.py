@@ -656,21 +656,42 @@ class MonthlyCostsService(MyCostsService):
         if getattr(self.context, 'storage_usage', None) is None:
             self.context.storage_usage = StorageUsageService(self.context)
         users = {}
+        skipped = []
         cursor = None
         measured_at = time.time()
+        logger = self.context.logger('monthly-costs')
         while True:
             result = self.context.accounts.list_users(
                 ListUsersRequest(paginator={'cursor': cursor, 'page_size': 100})
             )
             for user in result.listing or []:
                 # Do not divide by a sample of users who happened to open the browser.
-                usage = self.context.storage_usage.measure_for_costs(user.username)
-                if usage.get('state') != 'ready' or usage.get('partial'):
+                # One account that cannot be measured (deleted since it was listed, its
+                # home unreadable) is left out and the rest still measured: it has no
+                # figure, everyone else keeps theirs.
+                try:
+                    usage = self.context.storage_usage.measure_for_costs(user.username)
+                except Exception as error:
+                    logger.warning(
+                        f'Home not measured for costs, skipped: {user.username} '
+                        f'({type(error).__name__})'
+                    )
+                    skipped.append(user.username)
+                    continue
+                if usage.get('partial'):
+                    # a home too large to finish cannot be a share of the total
                     return None
+                if usage.get('state') != 'ready':
+                    logger.warning(
+                        f'Home not measured for costs, skipped: {user.username} '
+                        f'({usage.get("state")})'
+                    )
+                    skipped.append(user.username)
+                    continue
                 users[normalize_user(user.username, None)] = usage['total']['bytes']
             cursor = result.paginator.cursor if result.paginator else None
             if not cursor:
-                return dict(users=users, measured_at=measured_at)
+                return dict(users=users, measured_at=measured_at, skipped=skipped)
 
     def _storage(self, username, start, end):
         try:

@@ -1,7 +1,8 @@
-# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+# syntax=docker/dockerfile:1.29@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 # Carries the Linux release file. Amazon Linux needs libatomic for the official Node binary.
 
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023
+# The same base digest as the control-plane image, which Renovate moves for both.
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188
 
 RUN dnf install -y libatomic && dnf clean all
 

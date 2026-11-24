@@ -9,6 +9,7 @@ bedrock-runtime call for the life of the instance while the portal listed the mo
 from unittest.mock import Mock
 from typing import Any, Dict, List, Optional
 
+import pytest
 from botocore.exceptions import ClientError
 
 from ideadatamodel import (
@@ -67,6 +68,7 @@ class FakeEc2Client:
         self.describe_calls: List[Dict] = []
         self.replace_calls: List[Dict] = []
         self.associate_calls: List[Dict] = []
+        self.disassociate_calls: List[Dict] = []
 
     def describe_iam_instance_profile_associations(self, **kwargs) -> Dict[str, Any]:
         self.describe_calls.append(kwargs)
@@ -78,6 +80,11 @@ class FakeEc2Client:
         self.replace_calls.append(kwargs)
         if self.apply_error is not None:
             raise self.apply_error
+        return {}
+
+    def disassociate_iam_instance_profile(self, **kwargs) -> Dict[str, Any]:
+        self.disassociate_calls.append(kwargs)
+        self.associations = []
         return {}
 
     def associate_iam_instance_profile(self, **kwargs) -> Dict[str, Any]:
@@ -149,6 +156,12 @@ class FakeClusterConfig:
     @staticmethod
     def get_module_id(_module_name: str) -> str:
         return 'cluster-manager'
+
+    @staticmethod
+    def get_string(key: str, default: str = None) -> str:
+        if key == 'virtual-desktop-controller.dcv_host_instance_profile_arn':
+            return SHARED_INSTANCE_PROFILE_ARN
+        return default
 
     def get_bool(self, key: str, default: bool = None) -> bool:
         if key == 'cluster-manager.bedrock.enabled':
@@ -587,3 +600,102 @@ def test_a_pass_that_runs_out_of_time_keeps_its_place():
 
     assert utils.repair_project_instance_profiles(time_budget_ms=0) == 0
     assert utils._instance_profile_repair_cursor == '1'
+
+
+# --- sign-off B1: a host left on another project's profile is corrected --------------------
+
+
+@pytest.mark.parametrize(
+    'project',
+    [
+        Project(project_id=PROJECT_ID, name='test-project'),
+        bedrock_project(None),
+    ],
+    ids=['no bedrock', 'no profile yet'],
+)
+def test_a_host_on_another_projects_profile_goes_back_to_the_shared_one(project):
+    ec2_client = FakeEc2Client(
+        associations=[an_association(OLD_PROJECT_INSTANCE_PROFILE_ARN)]
+    )
+    session_db = FakeSessionDB()
+    utils = build_utils(session_db, ec2_client, FakeProjectsClient(project))
+
+    session = a_session(instance_profile_arn=OLD_PROJECT_INSTANCE_PROFILE_ARN)
+    assert utils.repair_project_instance_profile(session) is True
+    assert [c['IamInstanceProfile']['Arn'] for c in ec2_client.replace_calls] == [
+        SHARED_INSTANCE_PROFILE_ARN
+    ]
+    assert session_db.updated[-1].server.instance_profile_arn == (
+        SHARED_INSTANCE_PROFILE_ARN
+    )
+
+
+def test_a_project_no_longer_entitled_keeps_its_own_profile_on_its_desktop():
+    project = bedrock_project(PROJECT_INSTANCE_PROFILE_ARN)
+    project.bedrock.enabled = False
+    ec2_client = FakeEc2Client(
+        associations=[an_association(PROJECT_INSTANCE_PROFILE_ARN)]
+    )
+    session_db = FakeSessionDB()
+    utils = build_utils(session_db, ec2_client, FakeProjectsClient(project))
+
+    session = a_session(instance_profile_arn=PROJECT_INSTANCE_PROFILE_ARN)
+    assert utils.repair_project_instance_profile(session) is False
+    assert ec2_client.describe_calls == []
+    assert session_db.updated == []
+
+
+def test_a_stopped_host_is_taken_off_its_profile_and_associated_again():
+    ec2_client = FakeEc2Client(
+        associations=[an_association(SHARED_INSTANCE_PROFILE_ARN)]
+    )
+    session_db = FakeSessionDB()
+    utils = build_utils(
+        session_db,
+        ec2_client,
+        FakeProjectsClient(bedrock_project(PROJECT_INSTANCE_PROFILE_ARN)),
+    )
+
+    session = a_session(state=VirtualDesktopSessionState.STOPPED)
+    assert utils.repair_project_instance_profile(session) is True
+    assert ec2_client.replace_calls == []
+    assert ec2_client.disassociate_calls == [{'AssociationId': ASSOCIATION_ID}]
+    assert [c['IamInstanceProfile']['Arn'] for c in ec2_client.associate_calls] == [
+        PROJECT_INSTANCE_PROFILE_ARN
+    ]
+
+
+class RefusingEc2Client(FakeEc2Client):
+    """associates every profile except the one named: that one is refused"""
+
+    def __init__(self, refused_arn, **kwargs):
+        super().__init__(**kwargs)
+        self.refused_arn = refused_arn
+
+    def associate_iam_instance_profile(self, **kwargs) -> Dict[str, Any]:
+        self.associate_calls.append(kwargs)
+        arn = kwargs['IamInstanceProfile']['Arn']
+        if arn == self.refused_arn:
+            raise client_error('InvalidParameterValue', 'AssociateIamInstanceProfile')
+        self.associations = [an_association(arn)]
+        return {}
+
+
+def test_a_stopped_host_whose_new_profile_is_refused_is_put_back_on_its_previous_one():
+    ec2_client = RefusingEc2Client(
+        PROJECT_INSTANCE_PROFILE_ARN,
+        associations=[an_association(SHARED_INSTANCE_PROFILE_ARN)],
+    )
+    session_db = FakeSessionDB()
+    utils = build_utils(
+        session_db,
+        ec2_client,
+        FakeProjectsClient(bedrock_project(PROJECT_INSTANCE_PROFILE_ARN)),
+    )
+
+    session = a_session(state=VirtualDesktopSessionState.STOPPED)
+    assert utils.repair_project_instance_profile(session) is False
+    assert [a['IamInstanceProfile']['Arn'] for a in ec2_client.associations] == [
+        SHARED_INSTANCE_PROFILE_ARN
+    ]
+    assert session_db.updated == []

@@ -242,6 +242,8 @@ def test_cleanup_warning_deletion_and_pricing_preserve_stop_time(
         session.cleanup_warning_stop_time = stopped
         session.stopped_on = now.shift(days=-7).datetime
     else:
+        # the cleanup works on rows it listed from the table
+        session._read_entry = db.convert_session_object_to_db_dict(session)
         utils._warn_owner(session, stopped, timedelta(days=60), now.datetime, False)
         assert session.stopped_on == (stopped if previous_stop == 'recorded' else None)
     db.delete(session)

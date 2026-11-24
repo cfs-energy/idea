@@ -12,3 +12,13 @@ if ! grep -q '(HTTP 404)' "$ERROR_FILE"; then
   echo '::error::Could not verify that the release is absent. Publication stopped.' >&2
   exit 1
 fi
+# A tag without a release would take the release over: GitHub ignores --target for a tag that exists.
+if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" >/dev/null 2>"$ERROR_FILE"; then
+  echo "::error::Tag v${VERSION} exists without a release. Delete the leftover tag, or bump the version, before publishing."
+  exit 1
+fi
+if ! grep -q '(HTTP 404)' "$ERROR_FILE"; then
+  cat "$ERROR_FILE" >&2
+  echo '::error::Could not verify that the release tag is absent. Publication stopped.' >&2
+  exit 1
+fi

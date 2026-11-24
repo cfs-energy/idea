@@ -12,7 +12,9 @@ export interface HostPoolOptions {
 
 export function refreshHostsCommand(command: string, options: object, modules: readonly string[] = []): string {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  const argv = ["ideactl", command, ...modules.map(quote)];
+  // only the ecs module replaces hosts, so a scoped re-run must include it
+  const scoped = modules.length > 0 && !modules.includes("all") && !modules.includes("ecs") ? ["ecs", ...modules] : modules;
+  const argv = ["ideactl", command, ...scoped.map(quote)];
   for (const [key, value] of Object.entries(options)) {
     if (value === undefined || key === "refreshHosts" || key === "modules") continue;
     const flag = key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
@@ -111,4 +113,60 @@ export async function waitForDirectoryJoin(deps: Deps, options: HostPoolOptions)
     }
     await deps.sleep(30_000);
   }
+}
+
+/**
+ * Before an application module deploys: a container host whose recorded mount set (`idea.storage`,
+ * from its user data) differs from the current one mounts a new or moved FSx share as a plain
+ * local directory, and what a task writes there stays on that host. It runs after this run's ecs
+ * module, so after any host refresh, against the hosts running then. A host with no record (built
+ * before 26.11.2) is checked against the shares its launch template version mounts, and refused
+ * when that set differs from the current one or cannot be read. A record that can take no task
+ * (agent disconnected, or no longer an instance of the host group) is named with the command that
+ * deregisters it, and does not stop the deploy.
+ */
+export async function refuseHostsWithStaleMounts(deps: Deps, options: HostPoolOptions): Promise<void> {
+  if (deps.containerHosts === undefined) return;
+  const config = await ClusterConfig.fromDynamoDb(options.clusterName, options.awsRegion, { moduleSet: options.moduleSet, scan: deps.scan });
+  const cluster = config.getString("ecs.cluster_name");
+  if (!cluster) return;
+  // loaded here so the command line does not load the CDK library for every command
+  const { hostStorageDigest, hostStorageEntries } = await import("../cdk/stacks/ecs.ts");
+  // with no host mount, a task binds no host path, so no host can be missing one
+  if (hostStorageEntries(config).entries.length === 0) return;
+  const expected = hostStorageDigest(config);
+  const api = deps.containerHosts;
+  const context = { awsRegion: options.awsRegion, awsProfile: options.awsProfile };
+  const hosts = await api.containerInstances({ ...context, cluster });
+  // a draining host, or one whose agent is not connected, takes no new task, so neither counts
+  const leftover: typeof hosts = hosts.filter((host) => host.status === "ACTIVE" && host.agentConnected === false);
+  const active = hosts.filter((host) => host.status === "ACTIVE" && host.agentConnected !== false);
+  const stale = active.filter((host) => host.attributes?.["idea.storage"] !== undefined && host.attributes["idea.storage"] !== expected);
+  const unrecorded = active.filter((host) => host.attributes?.["idea.storage"] === undefined);
+  if (unrecorded.length > 0) {
+    // the share set is each line's source and directory; options alone do not move a share
+    const shares = (lines: readonly string[]) => lines.map((line) => line.split(/\s+/).slice(0, 2).join(" ")).sort().join("\n");
+    const current = shares(hostStorageEntries(config).entries.map((entry) => entry.line));
+    const capacityProvider = config.getString("ecs.capacity_provider", undefined, { required: true }) as string;
+    const group = await api.hostGroup({ ...context, capacityProvider });
+    const versions = await api.launchTemplateVersions({ ...context, name: group.name });
+    const mounted = new Map<string, Promise<string[] | undefined>>();
+    for (const host of unrecorded) {
+      const version = versions.instances.find((instance) => instance.instanceId === host.instanceId);
+      // a record left by a host the group no longer has: the capacity provider places no task on it
+      if (version === undefined) { leftover.push(host); continue; }
+      const id = version?.id;
+      const number = version?.version;
+      const lines = id === undefined || number === undefined ? undefined : await (mounted.get(`${id}:${number}`)
+        ?? mounted.set(`${id}:${number}`, api.launchTemplateMountLines({ ...context, id, version: number })).get(`${id}:${number}`)!);
+      // not known to have mounted the current shares: the same as a host with an old record
+      if (lines === undefined || shares(lines) !== current) stale.push(host);
+    }
+  }
+  for (const host of leftover) {
+    deps.out(`note: container instance ${host.instanceId || host.arn} is registered but can take no task (agent disconnected or no longer in the host group); `
+      + `the mount check skips it. Deregister it: aws ecs deregister-container-instance --cluster ${cluster} --container-instance ${host.arn} --force --region ${options.awsRegion}`);
+  }
+  if (stale.length === 0) return;
+  throw new GeneralException(`Hosts ${stale.map((host) => host.instanceId || host.arn).join(", ")} were built before the current shared storage mounts; tasks placed there would write to a local directory. Replace them, then deploy again: ${options.hostPoolRerunCommand ?? refreshHostsCommand("deploy", { clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile, moduleSet: options.moduleSet }, ["ecs"])}`);
 }

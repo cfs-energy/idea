@@ -375,3 +375,15 @@ describe('admin user costs page', () => {
         expect(await screen.findByText('Costs for alice')).toBeInTheDocument();
     });
 });
+
+describe('when the cost data cannot be read', () => {
+    it('says the list failed and offers a retry, not "No costs recorded"', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.client().myCosts(), 'listUserCosts').mockRejectedValueOnce({message: 'Network error'}).mockResolvedValue(LISTING as any);
+        renderPage();
+        expect(await screen.findByText('Could not load user costs')).toBeInTheDocument();
+        expect(screen.queryByText('No costs recorded')).toBeNull();
+        await userEvent.click(screen.getByRole('button', {name: 'Try again'}));
+        expect(await screen.findByText('bob')).toBeInTheDocument();
+    });
+});

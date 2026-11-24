@@ -12,8 +12,9 @@
 import ideaclustermanager
 
 from ideasdk.api import ApiInvocationContext, BaseAPI
+from ideasdk.auth import ApiAuthorizationType
 from ideadatamodel.analytics import OpenSearchQueryRequest, OpenSearchQueryResult
-from ideadatamodel import exceptions
+from ideadatamodel import constants, exceptions
 from ideasdk.utils import Utils
 
 
@@ -27,7 +28,9 @@ class AnalyticsAPI(BaseAPI):
     any write or index settings apis must not be exposed via this class.
     an AnalyticsAdminAPI should be exposed with elevated access to enable such functionality.
 
-    invocation simply checks if the invocation is authenticated (valid token)
+    the admin desktop overview is its only caller, so a query reads only the desktop
+    session alias, and only administrators, managers and desktop module administrators
+    may send one
     """
 
     def __init__(self, context: ideaclustermanager.AppContext):
@@ -40,6 +43,11 @@ class AnalyticsAPI(BaseAPI):
         request = context.get_request_payload_as(OpenSearchQueryRequest)
         if Utils.is_empty(request.data):
             raise exceptions.invalid_params('data is required')
+        alias = self.context.config().get_string(
+            f'{constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER}.opensearch.dcv_session.alias'
+        )
+        if Utils.is_empty(alias) or request.data.get('index') != alias:
+            raise exceptions.unauthorized_access()
 
         result = self.context.analytics_service().os_client.os_client.search(
             **request.data
@@ -47,8 +55,24 @@ class AnalyticsAPI(BaseAPI):
 
         context.success(OpenSearchQueryResult(data=result))
 
+    def desktop_administrator(self, context: ApiInvocationContext) -> bool:
+        authorization = context.get_authorization()
+        if authorization.type != ApiAuthorizationType.USER:
+            return False
+        config = self.context.config()
+        module = constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+        if not config.is_module_enabled(module):
+            return False
+        group = self.context.accounts.group_name_helper.get_module_administrators_group(
+            module_id=config.get_module_id(module)
+        )
+        return group in (authorization.groups or [])
+
     def invoke(self, context: ApiInvocationContext):
-        if not context.is_authenticated():
+        if not (
+            context.is_authorized(elevated_access=True)
+            or self.desktop_administrator(context)
+        ):
             raise exceptions.unauthorized_access()
 
         namespace = context.namespace

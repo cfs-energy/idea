@@ -243,8 +243,11 @@ def test_delete_queues_returns_failures(context, monkeypatch):
             )
 
     service = build_queue_profiles_service(context, monkeypatch, delete_queue)
+    monkeypatch.setattr(HpcQueueProfilesDAO, 'list_queue_profiles', lambda self: [])
 
-    failures = service._delete_queues(queue_names=[QUEUE_NAME, busy_queue])
+    failures = service._delete_queues(
+        queue_names=[QUEUE_NAME, busy_queue], queue_profile_id='profile-1'
+    )
 
     assert list(failures.keys()) == [busy_queue]
     assert failures[busy_queue].error_code == errorcodes.SCHEDULER_QUEUE_BUSY

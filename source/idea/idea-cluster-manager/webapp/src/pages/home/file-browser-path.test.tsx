@@ -114,6 +114,12 @@ async function startTyping(user: ReturnType<typeof userEvent.setup>) {
 
 // ---------------------------------------------------------------------------
 
+describe('a listing that ran out of time', () => {
+    it('suggests a command that survives a space in the path', () => {
+        expect(describeListingFailure('/data/my runs', { errorCode: 'FILE_OPERATION_TIMED_OUT' })).toContain("ls '/data/my runs'");
+    });
+});
+
 describe('path bar', () => {
     afterEach(() => {
         vi.restoreAllMocks();
@@ -187,8 +193,14 @@ describe('path bar', () => {
 
             expect(message).toContain('/nope');
             expect(message).toMatch(/does not exist/);
-            expect(message).toMatch(/not a directory/);
+            expect(message).toMatch(/not a folder/);
             expect(message).toMatch(/access/);
+        });
+
+        it('sends a user whose home folder cannot be opened to the administrator', () => {
+            expect(describeListingFailure('', { errorCode: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' })).toBe(
+                'Cannot open your home folder. It does not exist, is not a folder, or you do not have access. If you need it, ask your cluster administrator.'
+            );
         });
 
         it('passes any other failure through with its own message', () => {
@@ -235,7 +247,7 @@ describe('path bar', () => {
 
             expect(
                 await within(browserRoot()).findByText(
-                    /Cannot open \/data\/nope\. It does not exist, is not a directory, or you do not have access to it\./
+                    /Cannot open \/data\/nope\. It does not exist, is not a folder, or you do not have access\./
                 )
             ).toBeInTheDocument();
             // The directory that is on screen is still the real one, and the

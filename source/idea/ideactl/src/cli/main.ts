@@ -103,6 +103,23 @@ function red(message: string): string {
  * The real effects. Every AWS client is imported lazily so a command that needs no credentials
  * (`about`, `quick-setup-help`, `--help`) loads none of them.
  */
+/**
+ * A typed answer to a choice prompt: the default when empty, else the choice it names or the one
+ * choice it is a prefix of (case ignored, so `y` is Yes), else undefined (ask again).
+ */
+export function resolveChoiceAnswer(choice: { choices?: readonly string[]; default?: unknown }, answer: string): string | undefined {
+  const choices = choice.choices ?? [];
+  const typed = answer.trim().toLowerCase();
+  if (typed === '') return String(choice.default ?? choices[0]);
+  const exact = choices.find((option) => option.toLowerCase() === typed);
+  if (exact !== undefined) return exact;
+  const prefixed = choices.filter((option) => option.toLowerCase().startsWith(typed));
+  return prefixed.length === 1 ? prefixed[0] : undefined;
+}
+
+/** Unmatched answers a choice prompt takes before it stops, so piped input cannot loop it for ever. */
+export const CHOICE_ATTEMPTS = 3;
+
 export function liveDeps(): Deps {
   const region = environmentRegion;
   const callerIdentity = async (options: {
@@ -258,15 +275,24 @@ export function liveDeps(): Deps {
       secrets: {
         async listSecretsByTagValue(tagKey, tagValues) {
           const { SecretsManagerClient, ListSecretsCommand } = await import('@aws-sdk/client-secrets-manager');
-          const result = await new SecretsManagerClient(await awsClientOptions(region())).send(
-            new ListSecretsCommand({
-              Filters: [
-                { Key: 'tag-key', Values: [tagKey] },
-                { Key: 'tag-value', Values: tagValues },
-              ],
-            }),
-          );
-          return (result.SecretList ?? []).map((secret) => ({ Name: secret.Name, ARN: secret.ARN }));
+          const client = new SecretsManagerClient(await awsClientOptions(region()));
+          const list: Array<{ Name?: string; ARN?: string }> = [];
+          let nextToken: string | undefined;
+          // every page: a cluster's secret may sit past the first
+          do {
+            const result = await client.send(
+              new ListSecretsCommand({
+                NextToken: nextToken,
+                Filters: [
+                  { Key: 'tag-key', Values: [tagKey] },
+                  { Key: 'tag-value', Values: tagValues },
+                ],
+              }),
+            );
+            list.push(...(result.SecretList ?? []).map((secret) => ({ Name: secret.Name, ARN: secret.ARN })));
+            nextToken = result.NextToken;
+          } while (nextToken !== undefined);
+          return list;
         },
         async createSecret(input) {
           const { SecretsManagerClient, CreateSecretCommand } = await import('@aws-sdk/client-secrets-manager');
@@ -341,14 +367,21 @@ export function liveDeps(): Deps {
     uuid: () => randomUUID(),
     out: (line) => console.log(line),
     err: (line) => console.error(red(line)),
+    // an informational line on stderr, kept off stdout without reading as an error
+    notice: (line) => console.error(line),
     async prompt(choice: PromptChoice) {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
         const suffix = choice.choices === undefined ? ' [Y/n] ' : ` [${choice.choices.join('/')}] `;
-        const answer = (await rl.question(`${choice.message}${suffix}`)).trim();
+        let answer = (await rl.question(`${choice.message}${suffix}`)).trim();
         if (choice.choices !== undefined) {
-          const matched = choice.choices.find((option) => option.toLowerCase() === answer.toLowerCase());
-          return matched ?? String(choice.default ?? choice.choices[0]);
+          // an answer that matches no choice is asked again, never read as the default
+          for (let attempt = 1; ; attempt += 1) {
+            const resolved = resolveChoiceAnswer(choice, answer);
+            if (resolved !== undefined) return resolved;
+            if (attempt >= CHOICE_ATTEMPTS) throw new GeneralException(`no answer matched ${choice.choices.join(', ')}`);
+            answer = (await rl.question(`Answer one of ${choice.choices.join(', ')}${suffix}`)).trim();
+          }
         }
         if (answer === '') return choice.default !== false;
         return ['y', 'yes'].includes(answer.toLowerCase());
@@ -548,7 +581,8 @@ const program = new Command('ideactl')
       typeof options.configFile === "string" && typeof options.synthReads === "string";
     if (!offlineReplay && awsRegion !== undefined && deps.callerIdentity !== undefined) {
       const identity = await deps.callerIdentity({ awsRegion, awsProfile: selected });
-      deps.out(formatAwsIdentity(identity, selected));
+      // to stderr, so a command's own output (config show --format raw) is only its value
+      (deps.notice ?? deps.err)(formatAwsIdentity(identity, selected));
     }
   });
 

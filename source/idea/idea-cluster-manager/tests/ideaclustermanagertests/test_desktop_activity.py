@@ -195,6 +195,20 @@ def test_capture_writes_nothing_when_a_log_read_is_refused():
     assert store.rows == {}
 
 
+@pytest.mark.parametrize(
+    'partial', [dict(timed_out=True), dict(_shards=dict(total=2, failed=1))]
+)
+def test_capture_writes_nothing_when_the_session_read_is_partial(partial):
+    sessions = [dict(idea_session_id='s-1', owner='user-a', created_on=0)]
+    value = context(sessions, {})
+    search = value.analytics_service().os_client.os_client.search
+    search.return_value = {**search.return_value, **partial}
+    store = Store(state={'settled_through': '2024-02-29'})
+    with pytest.raises(ValueError):
+        DesktopActivity(value, store).capture(arrow.get('2024-03-02T12:00:00+00:00'))
+    assert store.rows == {'idle-state': {'settled_through': '2024-02-29'}}
+
+
 def test_capture_skips_clusters_without_desktops():
     value = SimpleNamespace(
         config=lambda: SimpleNamespace(is_module_enabled=lambda name: False)

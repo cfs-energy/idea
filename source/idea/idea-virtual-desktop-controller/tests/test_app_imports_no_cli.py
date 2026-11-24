@@ -47,7 +47,7 @@ def test_cli_main_imports_with_controller_dependencies():
     requirements = pathlib.Path(__file__).resolve().parents[4] / 'requirements'
     assert 'prettytable' in (requirements / 'runtime.in').read_text().splitlines()
     assert re.search(
-        r'^prettytable==\d+\.\d+\.\d+$',
+        r'^prettytable==\d+\.\d+\.\d+(?: \\)?$',
         (requirements / 'runtime.txt').read_text(),
         re.M,
     )

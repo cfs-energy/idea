@@ -1,7 +1,7 @@
 import {createContext, ReactNode, useContext, useMemo} from 'react';
-import {AreaChart, BarChart, Box, Button, ColumnLayout, Container, Grid, Header, Link, LineChart, Popover, ProgressBar, Spinner, SpaceBetween, StatusIndicator} from '@cloudscape-design/components';
+import {Alert, AreaChart, BarChart, Box, Button, ColumnLayout, Container, Grid, Header, Link, LineChart, Popover, ProgressBar, Spinner, SpaceBetween, StatusIndicator} from '@cloudscape-design/components';
 import {DesktopRow, JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingRow, ReportingSummary} from '../../client/reporting-model';
-import {budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, computeRateNote, jobRateNote, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent, STORAGE_EXCLUSIONS} from './reporting-format';
+import {axisMoney, budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, computeRateNote, jobRateNote, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent, STORAGE_EXCLUSIONS, wholeMoney} from './reporting-format';
 import InsightsTable, {InsightColumn, ReportLoading, ReportUser} from './insights-table';
 
 export const Missing = () => <span role="img" aria-label="No data">—</span>;
@@ -29,7 +29,7 @@ export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {w
         ['walltime_efficiency_pct', 'Walltime efficiency'], ['wasted_core_hours', 'Unused core-hours'], ['wasted_cost', 'Cost of unused core-hours']
     ] as const).filter(([key]) => !only || only.includes(key));
     return <TileRow>{tiles.filter(([key]) => jobs[key] != null).map(([key, title]) => <MetricTile key={key} title={title}
-        value={key === 'wasted_cost' ? money(jobs[key], currency) : key === 'wasted_core_hours' ? hours(jobs[key]) : percent(jobs[key])}
+        value={key === 'wasted_cost' ? wholeMoney(jobs[key], currency) : key === 'wasted_core_hours' ? hours(jobs[key]) : percent(jobs[key])}
         info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]), key)}>{efficiencyLabel(Number(jobs[key]), key)}</StatusIndicator>}</MetricTile>)}</TileRow>;
 }
 export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; currency: string}) {
@@ -51,11 +51,11 @@ export function Coaching({jobs, currency, personal = false}: {jobs: ReportingIns
     // compare with the jobs the estimate covers; jobs without CPU measurements are not part of it
     const covered = jobs.efficiency_cost ?? jobs.cost;
     const scope = jobs.jobs_with_efficiency < jobs.count ? `${personal ? 'your ' : ''}jobs with CPU measurements that finished` : `${personal ? 'your ' : ''}jobs that finished`;
-    return <Box>{`About ${money(jobs.wasted_cost, currency)} of the ${money(covered, currency)} estimated for ${scope} in this period paid for unused cores.`}</Box>;
+    return <Box>{`About ${wholeMoney(jobs.wasted_cost, currency)} of the ${wholeMoney(covered, currency)} estimated for ${scope} in this period paid for unused cores.`}</Box>;
 }
 export function DesktopCoaching({desktops, currency, personal = false}: {desktops: ReportingInsights['desktops']; currency: string; personal?: boolean}) {
     if (!desktops.desktops_with_activity || desktops.idle_cost == null || desktops.cost == null || Number(desktops.idle_cost) > Number(desktops.cost)) return null;
-    return <Box>{`About ${money(desktops.idle_cost, currency)} of the ${money(desktops.cost, currency)} estimated for ${personal ? 'your ' : ''}desktops in this period paid for idle desktop time.`}</Box>;
+    return <Box>{`About ${wholeMoney(desktops.idle_cost, currency)} of the ${wholeMoney(desktops.cost, currency)} estimated for ${personal ? 'your ' : ''}desktops in this period paid for idle desktop time.`}</Box>;
 }
 const idleDefinition = 'Hours a desktop ran with nobody connected and CPU under the idle stop threshold, from the checks the idle stop makes every 30 minutes.';
 // Each idle episode lasts up to the idle stop delay, so idle for most of the checked time
@@ -63,9 +63,11 @@ const idleDefinition = 'Hours a desktop ran with nobody connected and CPU under 
 export function desktopHint(desktop: DesktopRow) {
     return desktop.checked_hours >= 2 && desktop.idle_pct >= 50 ? `Idle ${hours(desktop.idle_hours)} of ${hours(desktop.checked_hours)} hours checked. Try a shorter idle time before it stops, in its schedule.` : null;
 }
+// A desktop's record can be gone by the time its costs are read; its id means nothing to anyone.
+const desktopName = (row: DesktopRow) => row.name ?? (row.instance_type ? `Deleted desktop (${row.instance_type})` : 'Deleted desktop');
 export function DesktopsTable({rows, currency, personal = false}: {rows: DesktopRow[]; currency: string; personal?: boolean}) {
     const columns: InsightColumn<DesktopRow>[] = [
-        {id: 'name', label: 'Desktop', header: 'Desktop', width: 200, minWidth: 140, value: row => row.name ?? row.idea_session_id, cell: row => <span title={row.name ?? row.idea_session_id}>{row.name ?? row.idea_session_id}</span>},
+        {id: 'name', label: 'Desktop', header: 'Desktop', width: 200, minWidth: 140, value: desktopName, cell: row => <span title={desktopName(row)}>{desktopName(row)}</span>},
         {id: 'idle_cost', label: 'Cost of idle time', header: 'Cost of idle time', value: row => numeric(row.idle_cost), cell: row => row.idle_cost == null ? <Missing/> : money(row.idle_cost, currency)},
         {id: 'idle_hours', label: 'Idle hours', header: <InfoTitle title="Idle hours">{idleDefinition}</InfoTitle>, value: row => row.idle_hours, cell: row => hours(row.idle_hours)},
         {id: 'idle_pct', label: 'Idle share', header: <InfoTitle title="Idle share">Idle hours as a share of the hours the idle stop checked.</InfoTitle>, value: row => row.idle_pct, cell: row => percent(row.idle_pct)},
@@ -73,7 +75,7 @@ export function DesktopsTable({rows, currency, personal = false}: {rows: Desktop
         {id: 'checked_hours', label: 'Hours checked', header: 'Hours checked', value: row => row.checked_hours, cell: row => hours(row.checked_hours)},
         ...(['instance_type', 'project', 'owner'] as const).map((key, i) => ({id: key, label: ['Instance type', 'Project', 'User'][i], header: ['Instance type', 'Project', 'User'][i], value: (row: DesktopRow) => row[key], cell: (row: DesktopRow) => row[key] ?? <Missing/>}))
     ];
-    return <InsightsTable title="Idle desktops" tableId={personal ? 'my-desktops' : 'desktops'} rows={rows} columns={columns} hidden={['project', ...(personal ? ['owner'] : [])]} defaultSort="idle_hours" empty="No idle desktop time in this period"/>;
+    return <InsightsTable title="Idle desktops" tableId={personal ? 'my-desktops' : 'desktops'} description={rows.length >= 25 ? `The ${rows.length} desktops with the most idle time.` : undefined} rows={rows} columns={columns} hidden={['project', ...(personal ? ['owner'] : [])]} defaultSort="idle_hours" empty="No idle desktop time in this period"/>;
 }
 const gib = (value: number) => new Intl.NumberFormat('en-US', {maximumFractionDigits: value < 10 ? 1 : 0}).format(value);
 export function jobHint(job: JobRow) {
@@ -90,7 +92,8 @@ export function jobHint(job: JobRow) {
 export function mergeJobs(jobs: ReportingInsights['jobs']) {
     return Array.from(new Map([...jobs.costliest, ...jobs.least_efficient].map(job => [job.job_id, job])).values());
 }
-export function JobsTable({title, rows, currency, timezone, personal = false, canOpenJobs = false}: {title: string; rows: JobRow[]; currency: string; timezone: string; personal?: boolean; canOpenJobs?: boolean}) {
+export function JobsTable({title, rows, currency, timezone, personal = false, canOpenJobs = false, total}: {title: string; rows: JobRow[]; currency: string; timezone: string; personal?: boolean; canOpenJobs?: boolean; total?: number}) {
+    const partial = total != null && total > rows.length;
     const columns: InsightColumn<JobRow>[] = [
         {id: 'name', label: 'Job name', header: 'Job name', width: 200, minWidth: 140, value: row => row.name ?? row.job_id,
             cell: row => <span title={row.name ?? row.job_id}>{personal || canOpenJobs ? <Link href={`#/${personal ? 'home' : 'soca'}/completed-jobs?job_id=${encodeURIComponent(row.job_id)}`}>{row.name ?? row.job_id}</Link> : row.name ?? row.job_id}</span>},
@@ -104,23 +107,25 @@ export function JobsTable({title, rows, currency, timezone, personal = false, ca
         {id: 'finished_at', label: 'Finished', header: 'Finished', value: row => row.finished_at, cell: row => date(row.finished_at, timezone, true)},
         ...(['job_id', 'nodes', 'project', 'owner'] as const).map((key, i) => ({id: key, label: ['Job ID', 'Nodes', 'Project', 'User'][i], header: ['Job ID', 'Nodes', 'Project', 'User'][i], value: (row: JobRow) => row[key], cell: (row: JobRow) => row[key] ?? <Missing/>}))
     ];
-    return <InsightsTable title={title} tableId={personal ? 'my-jobs' : 'jobs'} rows={rows} columns={columns} hidden={['job_id', 'nodes', 'project', ...(personal ? ['owner'] : [])]} defaultSort="cost" jobSort empty="No jobs finished in this period"/>;
+    return <InsightsTable title={title} tableId={personal ? 'my-jobs' : 'jobs'} exportLabel={partial ? `Export these ${rows.length}` : undefined}
+        description={partial ? <>The {rows.length} costliest or least efficient of {personal ? 'your' : 'the'} {total!.toLocaleString()} finished jobs.{(personal || canOpenJobs) && <> <Link href={`#/${personal ? 'home' : 'soca'}/completed-jobs`}>See all in Completed jobs</Link>.</>}</> : undefined} rows={rows} columns={columns} hidden={['job_id', 'nodes', 'project', ...(personal ? ['owner'] : [])]} defaultSort="cost" jobSort empty="No jobs finished in this period"/>;
 }
 const niceMax = (value: number) => {const step = 10 ** Math.floor(Math.log10(value)); return Math.ceil(value / step) * step;};
 const ChartColors = createContext(new Map<string, number>());
-export function CostBars({title, rows, currency, entity, info, storage = false}: {title: string; rows: (Omit<Ranked, 'cost'> & {cost: ReportingNumber})[]; currency: string; entity: string; info?: string; storage?: boolean}) {
+export function CostBars({title, rows, currency, entity, info, storage = false, empty}: {title: string; rows: (Omit<Ranked, 'cost'> & {cost: ReportingNumber})[]; currency: string; entity: string; info?: string; storage?: boolean; empty?: string}) {
     const ranks = useContext(ChartColors);
     const loading = useContext(ReportLoading);
     const nonzero = rows.filter(row => Number(row.cost) > 0);
     const format = (value: number) => storage ? bytes(value * 2 ** 30) : money(value, currency);
-    if (nonzero.length < 2) return <MetricTile title={title} value={nonzero.length ? format(Number(nonzero[0].cost)) : loading ? <Spinner/> : storage ? 'No storage measurements in this period' : 'No costs in this period'} info={info ?? (storage ? 'Most recent measured storage use in this period.' : 'Costs for this period.')}>
+    const others = rows.some(row => row.name === 'Other') ? `Top ${rows.length - 1} by cost. Other is everyone else.` : null;
+    if (nonzero.length < 2) return <MetricTile title={title} value={nonzero.length ? format(Number(nonzero[0].cost)) : loading ? <Spinner/> : empty ?? (storage ? 'No storage measurements in this period' : 'No costs in this period')} info={info ?? (storage ? 'Most recent measured storage use in this period.' : 'Costs for this period.')}>
         {nonzero.length === 1 && <Box>{nonzero[0].name}</Box>}
     </MetricTile>;
     return <Container header={<Header variant="h2">{info ? <InfoTitle title={title}>{info}</InfoTitle> : title}</Header>}><BarChart
         series={[{title, type: 'bar', color: palette[0], data: nonzero.map(row => ({x: row.name, y: Number(row.cost)})), valueFormatter: format}]}
         xDomain={nonzero.map(row => row.name)} xScaleType="categorical" yScaleType="linear" horizontalBars
-        xTitle={entity} yTitle={storage ? 'Stored data (GiB)' : `Cost (${currency})`} yTickFormatter={format} ariaLabel={title} hideFilter hideLegend
-        height={Math.max(200, nonzero.length * 28)} empty={<Box>No costs in this period</Box>}/></Container>;
+        xTitle={entity} yTitle={storage ? 'Stored data (GiB)' : `Cost (${currency})`} yTickFormatter={storage ? format : value => axisMoney(value, currency)} ariaLabel={title} hideFilter hideLegend
+        height={Math.max(200, nonzero.length * 28)} empty={<Box>No costs in this period</Box>}/>{others && <Box variant="small" color="text-body-secondary">{others}</Box>}</Container>;
 }
 export function DailyChart({title, points, currency, timezone, storage = false, empty, period}: {title: string; points: NamedPoint[]; currency: string; timezone: string; storage?: boolean; empty: string; period?: ReportingInsights['period']}) {
     const ranks = useContext(ChartColors);
@@ -131,7 +136,7 @@ export function DailyChart({title, points, currency, timezone, storage = false, 
     const series = cappedSeries(measured, ranks, !storage && start && end ? calendarDays(start, end) : undefined).map(series => ({...series, data: series.data.map(point => ({x: new Date(`${point.x}T12:00:00Z`), y: point.y}))}));
     const format = (value: number) => storage ? `${new Intl.NumberFormat('en-US', {maximumSignificantDigits: 3}).format(value)} GiB` : money(value, currency);
     const common = {xDomain: start && end ? [new Date(`${start}T12:00:00Z`), new Date(`${end}T12:00:00Z`)] : undefined, xScaleType: 'time' as const, yScaleType: 'linear' as const,
-        xTitle: 'Date', yTitle: storage ? 'Stored data (GiB)' : `Cost (${currency})`, xTickFormatter: (value: Date) => new Intl.DateTimeFormat('en-US', {timeZone: 'UTC', month: 'short', day: 'numeric', ...(start?.slice(0, 4) !== end?.slice(0, 4) ? {year: 'numeric' as const} : {})}).format(value), yTickFormatter: format,
+        xTitle: 'Date', yTitle: storage ? 'Stored data (GiB)' : `Cost (${currency})`, xTickFormatter: (value: Date) => new Intl.DateTimeFormat('en-US', {timeZone: 'UTC', month: 'short', day: 'numeric', ...(start?.slice(0, 4) !== end?.slice(0, 4) ? {year: 'numeric' as const} : {})}).format(value), yTickFormatter: storage ? format : (value: number) => axisMoney(value, currency),
         height: 280, hideFilter: true, hideLegend: series.length < 2, ariaLabel: title, statusType: loading && !points.length ? 'loading' as const : 'finished' as const, empty: loading ? null : <Box>{empty}</Box>};
     return <Container header={<Header variant="h2">{storage ? <InfoTitle title={title}>Shows dates with measurements for all displayed tiers.</InfoTitle> : title}</Header>}>{storage
         ? <LineChart {...common} yDomain={[0, niceMax(Math.max(1, ...measured.map(point => point.value)))]} series={series.map(series => ({...series, type: 'line', valueFormatter: format}))}/>
@@ -152,6 +157,8 @@ interface InsightTabProps {
     storageExtra?: ReactNode;
     /** effective compute rate as a share of on-demand list price, from cluster settings */
     computeRate?: number;
+    /** says why the desktop chart is empty when that isn't "no desktops" */
+    desktopEmpty?: string;
 }
 export function InsightTab(props: InsightTabProps) {
     const data = props.insights;
@@ -162,7 +169,16 @@ export function InsightTab(props: InsightTabProps) {
     ]), [data]);
     return <ReportLoading.Provider value={props.loading ?? false}><ChartColors.Provider value={ranks}><ReportUser.Provider value={props.username ?? ''}><InsightView {...props}/></ReportUser.Provider></ChartColors.Provider></ReportLoading.Provider>;
 }
-function InsightView({tab, insights: data, summary, userRow, timezone, personal = false, canOpenJobs = false, overviewTiles, overviewExtra, storageExtra, computeRate = 1}: InsightTabProps) {
+const SOURCE_WORDS: Record<string, string> = {jobs: 'job history', desktops: 'desktop records', desktop_history: 'desktop records', desktop_activity: 'desktop activity', storage: 'storage measurements', budgets: 'project budgets', projections: 'desktop and storage costs'};
+function ReportGaps({sources}: {sources: string[]}) {
+    if (!sources.length) return null;
+    const words = Array.from(new Set(sources.map(source => SOURCE_WORDS[source] ?? 'some records')));
+    return <Alert type="warning">{`We couldn't read ${words.join(', ')} just now, so this page may be missing data. Try again in a few minutes.`}</Alert>;
+}
+function InsightView({tab, insights: data, summary, userRow, timezone, personal = false, canOpenJobs = false, overviewTiles, overviewExtra, storageExtra, computeRate = 1, desktopEmpty, loading = false}: InsightTabProps) {
+    const missing = data.unavailable ?? [];
+    const jobsEmpty = missing.includes('jobs') ? "We couldn't read job history" : undefined;
+    const desktopsMissing = ['desktops', 'desktop_history', 'projections'].some(source => missing.includes(source)) ? "We couldn't read desktop costs" : desktopEmpty;
     const rateNote = computeRateNote(computeRate);
     const jobNote = jobRateNote(computeRate);
     const rateCaption = <Box variant="small" color="text-body-secondary">{rateNote}</Box>;
@@ -172,16 +188,18 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
     const spend = username ? userRow : summary?.tiles.total;
     const costs = [data.jobs.cost, data.desktops.cost, data.storage.cost].filter(value => value != null);
     const total = costs.length ? costs.reduce<number>((sum, value) => sum + Number(value), 0) : null;
-    const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={money(value, currency)} info={metricInfo(details, timezone, definition)}>{children}</MetricTile>;
+    const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={wholeMoney(value, currency)} info={metricInfo(details, timezone, definition)}>{details && details.missing_days > 0 ? <Box color="text-body-secondary">{details.missing_days === 1 ? 'At least a day is' : `At least ${details.missing_days} days are`} missing, so this may be higher.</Box> : null}{children}</MetricTile>;
+    const gaps = <ReportGaps sources={missing}/>;
     if (tab === 'overview') return <SpaceBetween size="l">
+        {gaps}
         <Coaching jobs={data.jobs} currency={currency} personal={personal}/>
         <DesktopCoaching desktops={data.desktops} currency={currency} personal={personal}/>
         {overviewTiles ?? (personal ? <TileRow>
-            {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
+            {tile('Jobs, desktops and storage', total, summary?.coverage.spend_total, "Adds the job, desktop and storage costs for this period. Doesn't include desktop disks or AI.")}
             {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, `Estimated from jobs that finished in this period, at the on-demand or spot rate each ran at, plus job storage. ${jobNote}`)}
             {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, `Recorded desktop costs from stored daily costs for this period. ${rateNote}`)}
             {tile('Storage spend', data.storage.cost, summary?.coverage.shared_storage, `Storage cost based on measured use. ${STORAGE_EXCLUSIONS}`)}
-        </TileRow> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <TileRow>
+        </TileRow> : !spend ? (loading ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <Box>No cost records for this period.</Box>) : <TileRow>
             {tile('Total spend', spend.spend_total, spend.coverage.spend_total ?? summary?.coverage.spend_total, 'All recorded costs for this period: jobs, desktops, desktop disks, storage and AI.')}
             {([
                 ['jobs', 'Job spend', `Recorded job costs for this period. ${jobNote}`],
@@ -190,42 +208,49 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
                 ['shared_storage', 'Storage spend', `Storage cost based on measured use. ${STORAGE_EXCLUSIONS}`],
                 ['ai', 'AI spend', 'Recorded AI costs for this period.']
             ] as const).filter(([key]) => spend.spend_by_facet[key] != null && Number(spend.spend_by_facet[key]) !== 0).map(([key, title, definition]) => <MetricTile key={key} title={title}
-                value={money(spend.spend_by_facet[key], currency)} info={metricInfo(spend.coverage[key] ?? summary?.coverage[key], timezone, definition)}/>)}
+                value={wholeMoney(spend.spend_by_facet[key], currency)} info={metricInfo(spend.coverage[key] ?? summary?.coverage[key], timezone, definition)}/>)}
         </TileRow>)}
         {overviewExtra}
         <EfficiencyTiles jobs={data.jobs} currency={currency} only={['cpu_efficiency_pct', 'wasted_core_hours', 'wasted_cost']}/>
-        <DailyChart period={data.period} title="Daily job cost by project" points={data.jobs.daily_by_project.map(row => ({name: row.project, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No jobs finished in this period"/>
-        {!scoped && <CostBars title="Spend by user" rows={data.jobs.by_user ?? []} info="Finished job costs for the top 15 users." currency={currency} entity="User"/>}
+        <DailyChart period={data.period} title="Daily job cost by project" points={data.jobs.daily_by_project.map(row => ({name: row.project, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty={jobsEmpty ?? 'No jobs finished in this period'}/>
+        {!scoped && <CostBars title="Job cost by user" rows={data.jobs.by_user ?? []} info="Finished job costs." currency={currency} entity="User"/>}
         <BudgetTable budgets={data.budgets} currency={currency}/>
     </SpaceBetween>;
     if (tab === 'jobs') return <SpaceBetween size="l">
-        <Box variant="small" color="text-body-secondary">{jobNote}</Box>
+        {gaps}
+        <Box variant="small" color="text-body-secondary">{jobNote}{data.jobs.unpriced ? ` ${data.jobs.unpriced.toLocaleString()} of ${data.jobs.count.toLocaleString()} jobs have no price and aren't in these totals.` : ''}</Box>
         <EfficiencyTiles jobs={data.jobs} currency={currency} weightedInfo/>
         <Grid gridDefinition={[1, 2, 3].map(() => ({colspan: {default: 12, m: 4}}))}>
-        <CostBars title="Job cost by queue" rows={data.jobs.by_queue} currency={currency} entity="Queue"/>
-        <CostBars title="Job cost by project" rows={data.jobs.by_project} currency={currency} entity="Project"/>
-        <CostBars title="Job cost by instance family" rows={data.jobs.by_instance_family} currency={currency} entity="Instance family"/>
+        <CostBars title="Job cost by queue" rows={data.jobs.by_queue} currency={currency} entity="Queue" empty={jobsEmpty}/>
+        <CostBars title="Job cost by project" rows={data.jobs.by_project} currency={currency} entity="Project" empty={jobsEmpty}/>
+        <CostBars title="Job cost by instance family" rows={data.jobs.by_instance_family} currency={currency} entity="Instance family" empty={jobsEmpty}/>
         </Grid>
-        <JobsTable title="Top jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone} personal={personal} canOpenJobs={canOpenJobs}/>
+        <JobsTable title="Top jobs" rows={mergeJobs(data.jobs)} currency={currency} timezone={timezone} personal={personal} canOpenJobs={canOpenJobs} total={data.jobs.count}/>
     </SpaceBetween>;
     const idle = data.desktops.desktops_with_activity > 0;
+    const desktopsFrom = data.desktops.available_from && data.desktops.available_from > data.period.start ? data.desktops.available_from : null;
     if (tab === 'desktops') return <SpaceBetween size="l">
+        {gaps}
         {rateCaption}
+        {desktopsFrom && <Box>{`Desktop spend covers ${date(desktopsFrom, timezone)} onward. Earlier desktop costs aren't kept by day.`}</Box>}
+        {!!data.desktops.missing_days && <Box>{`No desktop cost for ${data.desktops.missing_days === 1 ? 'one day' : `${data.desktops.missing_days} days`} in this period, so the total may be low.`}</Box>}
         <DesktopCoaching desktops={data.desktops} currency={currency} personal={personal}/>
         <TileRow>{tile('Desktop spend', data.desktops.cost, undefined, `Recorded desktop costs from stored daily costs for this period. ${rateNote}`)}<MetricTile title="Desktop hours" value={data.desktops.hours == null ? null : hours(data.desktops.hours)} info="Estimated desktop hours from sessions overlapping this period."/>
             {idle && <MetricTile title="Idle hours" value={hours(data.desktops.idle_hours)} info={`${idleDefinition} Uses ${data.desktops.desktops_with_activity} of ${Math.max(data.desktops.count, data.desktops.desktops_with_activity)} desktops.`}/>}
             {idle && <MetricTile title="Cost of idle time" value={data.desktops.idle_cost == null ? null : money(data.desktops.idle_cost, currency)} info={`Idle hours multiplied by each desktop's hourly price. ${rateNote}`}/>}</TileRow>
-        <DailyChart period={data.period} title={scoped ? "Daily desktop cost" : "Daily desktop cost by user"} points={data.desktops.daily_top_users.map(row => ({name: personal ? 'Desktops' : row.user, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty="No desktop costs in this period"/>
+        <DailyChart period={data.period} title={scoped ? "Daily desktop cost" : "Daily desktop cost by user"} points={data.desktops.daily_top_users.map(row => ({name: personal ? 'Desktops' : row.user, x: row.date, value: Number(row.cost)}))} currency={currency} timezone={timezone} empty={desktopsMissing ?? 'No desktop costs in this period'}/>
         {!scoped && <CostBars title="Desktop cost by user" rows={data.desktops.by_user ?? []} currency={currency} entity="User"/>}
-        <CostBars title="Desktop cost by project" rows={data.desktops.by_project} currency={currency} entity="Project"/>
+        <CostBars title="Desktop cost by project" rows={data.desktops.by_project} currency={currency} entity="Project" empty={desktopsMissing}/>
         {idle && Number(data.desktops.idle_cost) > 0 && !scoped && <CostBars title="Cost of idle time by user" rows={data.desktops.idle_by_user ?? []} currency={currency} entity="User"/>}
         {idle && Number(data.desktops.idle_cost) > 0 && <CostBars title="Cost of idle time by project" rows={data.desktops.idle_by_project} currency={currency} entity="Project"/>}
         {idle && <DesktopsTable rows={data.desktops.least_efficient} currency={currency} personal={personal}/>}
     </SpaceBetween>;
     return <SpaceBetween size="l">
+        {gaps}
         <Box variant="small" color="text-body-secondary">{STORAGE_EXCLUSIONS}</Box>
+        {scoped && data.storage.cost == null && data.storage.used_bytes == null && !missing.length && <Box>No storage measured for you in this period.</Box>}
         <ColumnLayout columns={2}>{tile('Storage spend', data.storage.cost, undefined, `Storage cost based on measured use. ${STORAGE_EXCLUSIONS}`)}<MetricTile title="Stored data" value={data.storage.used_bytes == null ? null : bytes(data.storage.used_bytes)} info="Most recent measured storage use in this period."/></ColumnLayout>
-        {!scoped && <CostBars title="Stored data by user" rows={(data.storage.by_user ?? []).map(row => ({name: row.name, cost: row.bytes / 2 ** 30, count: null, share_pct: 0}))} currency={currency} entity="User" storage/>}
+        {!scoped && <CostBars title="Top 15 by stored data" rows={(data.storage.by_user ?? []).slice(0, 15).map(row => ({name: row.name, cost: row.bytes / 2 ** 30, count: null, share_pct: 0}))} currency={currency} entity="User" storage/>}
         {!scoped && <InsightsTable title="Storage by user" rows={(data.storage.by_user ?? []).filter(row => row.bytes > 0)} defaultSort="bytes" empty="No storage measurements in this period" columns={[
             {id: 'name', label: 'User', header: 'User', value: row => row.name, cell: row => row.name},
             {id: 'bytes', label: 'Stored data', header: 'Stored data', value: row => row.bytes, cell: row => bytes(row.bytes)},

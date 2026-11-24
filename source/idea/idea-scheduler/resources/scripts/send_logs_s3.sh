@@ -39,14 +39,40 @@ COMPUTE_NODE_LOGS="${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/logs"
 exec 9>"${SCHEDULER_DIRECTORY}/.idea-log-archive.lock"
 flock -n 9 || exit 0
 
+# The first run, and any run without a record of a success, syncs each directory whole. After
+# a run that uploaded everything, only the files changed since a day before it started are
+# copied, so the daily run no longer lists everything ever archived under the prefix. The
+# day of margin covers a file still being written when the last run read it.
+SUCCESS_MARKER="${SCHEDULER_DIRECTORY}/.idea-log-archive.last-success"
+RUN_STARTED=$(date +%s)
+CHANGED_WITHIN_MINUTES=""
+if [[ -f "${SUCCESS_MARKER}" ]]; then
+  last_started=$(<"${SUCCESS_MARKER}")
+  if [[ "${last_started}" =~ ^[0-9]+$ && "${last_started}" -le "${RUN_STARTED}" ]]; then
+    CHANGED_WITHIN_MINUTES=$(( (RUN_STARTED - last_started + 86400) / 60 + 1 ))
+  fi
+fi
+
 # Each directory is uploaded, then pruned of what is older than the retention. A failed
 # upload is logged and that directory keeps twice the retention instead, so one bad day
 # cannot let the logs grow on PBS_HOME without bound. The run still fails when an upload did.
 failed=0
+upload_logs() {
+  local directory="$1" name="$2" file
+  if [[ -z "${CHANGED_WITHIN_MINUTES}" ]]; then
+    aws s3 sync "${directory}" "${S3_BUCKET_SCHEDULER_LOGS}${name}/"
+    return
+  fi
+  # ponytail: one aws call per changed file, in sequence. Fine for the few files a day
+  # produces; thousands of compute node logs a day would want them batched.
+  while IFS= read -r -d '' file; do
+    aws s3 cp --only-show-errors "${file}" "${S3_BUCKET_SCHEDULER_LOGS}${name}/${file#"${directory%/}"/}" || return
+  done < <(find "${directory}" -type f ! -name '.nfs*' -mmin "-${CHANGED_WITHIN_MINUTES}" -print0)
+}
 archive_logs() {
   local directory="$1" name="$2" age="${DATA_RETENTION}"
   [[ -d "${directory}" ]] || return 0
-  if ! aws s3 sync "${directory}" "${S3_BUCKET_SCHEDULER_LOGS}${name}/"; then
+  if ! upload_logs "${directory}" "${name}"; then
     age=$(( DATA_RETENTION * 2 ))
     echo "log archive: upload of ${directory} failed; pruning only what is older than ${age} days" >&2
     failed=1
@@ -63,4 +89,8 @@ archive_logs "${SCHEDULER_ACCOUNTING}" accounting
 archive_logs "${SCHEDULER_SERVER_LOGS}" server_logs
 archive_logs "${SCHEDULER_SCHED_LOGS}" sched_logs
 archive_logs "${COMPUTE_NODE_LOGS}" compute_nodes
+# Only when every directory went up: a marker after a partial run would skip what failed.
+if [[ "${failed}" -eq 0 ]]; then
+  echo "${RUN_STARTED}" > "${SUCCESS_MARKER}"
+fi
 exit "${failed}"

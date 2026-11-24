@@ -1,5 +1,6 @@
 /** SSH bastion tasks, persistent host keys, stable load-balancer addresses, and directory access. */
 
+import { checkSiteHookSettings, siteHookDigest } from '../site-hook.ts';
 import { CfnDeletionPolicy, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -152,9 +153,19 @@ export class BastionHostStack extends IdeaBaseStack {
       ...[...this.cluster.publicSubnets, ...this.cluster.privateSubnets].map((subnet) => subnet.ipv4CidrBlock)])].join(',');
     // and the SSH allowlist the bastion prefix list holds (cluster.ts), read the same way; the
     // script keeps penalizing any entry wider than /8
+    // Read at deploy: this process has no settings client, so the switch takes a task replacement.
+    environment['IDEA_BASTION_METRICS'] = String(
+      config.getString('metrics.provider', '') === 'dogstatsd'
+      && config.getBool('metrics.health.enabled', true)
+      && config.getBool('metrics.health.bastion.enabled', true),
+    );
     environment['IDEA_SSH_CLIENT_CIDRS'] = [...new Set(config.getList<string>('cluster.network.ssh_client_ip', [])
       .filter((ip) => !isEmpty(ip)).map((ip) => (ip.includes('/') ? ip : `${ip}/32`)))].join(',');
     environment['IDEA_DATA_DIR'] = config.getString('shared-storage.data.mount_dir', undefined, { required: true }) as string;
+    // Set, the site hook runs only when its SHA-256 matches (roles/bastion.sh); unset, it runs as
+    // before and the task log warns with the digest to set.
+    checkSiteHookSettings(config, this.stack, ['bastion-host.site_hook_sha256']);
+    environment['IDEA_SITE_HOOK_SHA256'] = siteHookDigest(config, 'bastion-host.site_hook_sha256');
     // the site hook lives under the cluster home on /apps, as the compute and desktop hooks do
     environment['IDEA_CLUSTER_HOME'] = config.getString('cluster.home_dir', undefined, { required: true }) as string;
     const secrets: Record<string, ecs.Secret> = {};
@@ -176,6 +187,14 @@ export class BastionHostStack extends IdeaBaseStack {
         actions: ['sqs:SendMessage'],
         resources: [config.getString('directoryservice.ad_automation.sqs_queue_arn', undefined, { required: true }) as string],
       }));
+      // the join request goes to a queue encrypted with the SQS key, which may differ from the table key
+      if (config.getString('cluster.sqs.kms_key_id')) {
+        taskRole.addToPolicy(new iam.PolicyStatement({
+          actions: ['kms:Decrypt', 'kms:GenerateDataKey'],
+          resources: [new ArnBuilder(config).kmsSqsKeyArn],
+          conditions: { StringEquals: { 'kms:ViaService': `sqs.${this.stack.region}.${this.stack.urlSuffix}` } },
+        }));
+      }
       taskRole.addToPolicy(new iam.PolicyStatement({
         actions: ['dynamodb:GetItem'],
         resources: [this.stack.formatArn({ service: 'dynamodb', resource: 'table', resourceName: `${this.clusterName}.ad-automation` })],
@@ -195,7 +214,7 @@ export class BastionHostStack extends IdeaBaseStack {
       ],
     });
     container.addPortMappings({ containerPort: 22, protocol: ecs.Protocol.TCP });
-    addStorageMounts(scope, task, container);
+    addStorageMounts(scope, task, container, 'bastion-host');
     const service = buildEc2Service(scope, {
       constructId: 'bastion-service', serviceName: `${this.clusterName}-${this.moduleId}`,
       taskDefinition: task, desiredCount: sizing.desired,

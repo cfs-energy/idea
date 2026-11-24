@@ -32,6 +32,8 @@ class SocaAppAPI(BaseAPI):
             )
         )
 
+    NAMESPACES = frozenset({'App.GetModuleInfo'})
+
     def invoke(self, context: ApiInvocationContext):
         # module name/version disclosure requires a valid token, matching the
         # ClusterSettings posture. an unauthenticated caller is rejected here.

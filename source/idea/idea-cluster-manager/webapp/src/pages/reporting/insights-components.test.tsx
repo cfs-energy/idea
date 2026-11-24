@@ -1,6 +1,7 @@
 import {render, screen, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {csvCell, readPreferences, savePreferences} from './insights-table';
+import {readPreferences, savePreferences} from './insights-table';
+import {csvCell} from '../../common/csv';
 import {BudgetTable, Coaching, DesktopCoaching, desktopHint, EfficiencyTiles, InsightTab, JobsTable, jobHint, MetricTile, mergeJobs} from './insights-components';
 import {exampleDesktop, exampleJob, insightsFixture} from './insights-fixture';
 import {budgetPresentation} from './reporting-format';

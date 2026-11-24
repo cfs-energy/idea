@@ -303,7 +303,7 @@ class CostMetricsService(SocaService):
 
     def get_lookback_days(self) -> int:
         return max(
-            1, self.context.config().get_int(self._config_key('lookback_days'), 3)
+            1, self.context.config().get_int(self._config_key('lookback_days'), 7)
         )
 
     def reader(self) -> CostExplorerReader:
@@ -356,7 +356,11 @@ class CostMetricsService(SocaService):
             outbox = CollectorOutbox(
                 self.context, self._config_key('outbox'), historical=True
             )
-            outbox.replay()
+            try:
+                outbox.replay()
+            except Exception as e:
+                # an undeliverable batch stays saved and must not stop the read
+                self.logger.warning(f'saved cost metrics not delivered: {e}')
             # A replica's settings cache can lag behind the previous lock holder.
             # A consistent read avoids repeating collection while saved metrics remain retryable.
             entry = (

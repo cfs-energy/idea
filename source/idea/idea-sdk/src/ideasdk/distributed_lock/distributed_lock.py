@@ -122,6 +122,22 @@ class DistributedLock(SocaService, DistributedLockProtocol):
         with self._lock:
             self._active_locks[key] = acquired_lock
 
+    def is_held(self, key: str) -> bool:
+        """
+        Whether the lease is still this process's, from its last heartbeat and without a
+        call to the store: the same test assert_held makes before its heartbeat.
+        """
+        with self._lock:
+            lock = self._active_locks.get(key)
+        if lock is None:
+            return False
+        with lock.thread_lock:
+            return (
+                lock.status == lock.LOCKED
+                and time.monotonic() - lock.last_updated_time
+                < self._lock_client._safe_period.total_seconds()
+            )
+
     def assert_held(self, key: str):
         with self._lock:
             lock = self._active_locks.get(key)
@@ -154,6 +170,6 @@ class DistributedLock(SocaService, DistributedLockProtocol):
     def stop(self):
         self.logger.info('stopping distributed lock ...')
         if self._lock_client is not None:
-            for key in self._active_locks:
+            for key in list(self._active_locks):
                 self.release(key)
             self._lock_client.close(release_locks=True)

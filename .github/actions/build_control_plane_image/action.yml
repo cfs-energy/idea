@@ -1,0 +1,135 @@
+name: Build, test and scan the control-plane image
+description: >-
+  The one definition of the control-plane image build, used by the release build (build_push.yaml) and the pull request check (image_checks.yaml). It builds the image once into an OCI archive, smoke-tests and scans that same image, and publishes nothing. The caller checks out the source and runs setup_dev_environment and build_modules first.
+inputs:
+  cache-write:
+    description: "'true' writes the build cache; 'false' only reads it."
+    required: true
+outputs:
+  digest:
+    description: The archived image's manifest digest.
+    value: ${{ steps.image.outputs.digest }}
+  archive_sha256:
+    description: The SHA-256 of the archive at $RUNNER_TEMP/control-plane-image/control-plane.tar.
+    value: ${{ steps.image.outputs.archive_sha256 }}
+runs:
+  using: composite
+  steps:
+    - name: Stage DCV packages
+      shell: bash
+      run: bash scripts/ci-stage-images.sh
+    - name: Expose the build cache runtime
+      # Shell buildx commands need the cache credentials provided to JavaScript actions.
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9; trufflehog:ignore (public action commit)
+      with:
+        script: |
+          for (const name of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL']) {
+            const value = process.env[name];
+            if (!value) throw new Error(`Missing ${name}`);
+            if (name === 'ACTIONS_RUNTIME_TOKEN') core.setSecret(value);
+            core.exportVariable(name, value);
+          }
+    - name: Build and test the image
+      id: image
+      shell: bash
+      env:
+        CACHE_WRITE: ${{ inputs.cache-write }}
+      run: |
+        set -euo pipefail
+        case "$CACHE_WRITE" in
+          true) CACHE_TO=(--cache-to "type=gha,version=2,mode=max,scope=idea-control-plane") ;;
+          false) CACHE_TO=() ;;
+          *) echo "::error::cache-write must be true or false, not '${CACHE_WRITE}'."; exit 1 ;;
+        esac
+        test -s source/idea/ideactl/test/cli/shell-path-values.yml
+        VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+        IMAGE="idea-control-plane-build:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        ARCHIVE="${RUNNER_TEMP}/control-plane-image/control-plane.tar"
+        mkdir -p "$(dirname "$ARCHIVE")"
+        df -h / "$RUNNER_TEMP"
+        docker buildx create --use --platform linux/arm64 --name idea-images-builder
+        docker buildx inspect --bootstrap
+        # One build, two exports: the OCI archive the publish job pushes unchanged, and the
+        # same image loaded here for the smoke tests and the scan.
+        docker buildx build --platform linux/arm64 --provenance=false \
+          --build-arg IDEA_VERSION="${VERSION}" \
+          --build-arg IDEA_PACKAGE_REFRESH="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+          --build-context dcv-packages=/tmp/dcv-packages \
+          --cache-from type=gha,version=2,scope=idea-control-plane \
+          ${CACHE_TO[@]+"${CACHE_TO[@]}"} \
+          --output "type=oci,dest=${ARCHIVE}" \
+          --output "type=docker,name=${IMAGE}" \
+          -f deployment/ecr/idea-control-plane/Dockerfile .
+        DIGEST=$(tar -xOf "$ARCHIVE" index.json | jq -er '.manifests | if length == 1 then .[0].digest else error("the archive must hold exactly one image manifest") end')
+        CONFIG=$(tar -xOf "$ARCHIVE" "blobs/sha256/${DIGEST#sha256:}" | jq -er '.config.digest')
+        # The smoked and scanned image is the archived one. Layer diff IDs are digests of the
+        # uncompressed layers, recorded in the image config, so both image stores report the same
+        # list whatever the export's compression or media types. The classic store's image ID is
+        # also the config digest; the containerd store's is a manifest digest, not comparable.
+        ARCHIVED_LAYERS=$(tar -xOf "$ARCHIVE" "blobs/sha256/${CONFIG#sha256:}" | jq -ec '.rootfs.diff_ids | select(length > 0)')
+        LOADED_LAYERS=$(docker image inspect --format '{{json .RootFS.Layers}}' "$IMAGE" | jq -ec '.')
+        if [ "$LOADED_LAYERS" != "$ARCHIVED_LAYERS" ]; then
+          echo "::error::The loaded image's layers are not the archived image ${DIGEST}'s layers."
+          exit 1
+        fi
+        if ! docker info --format '{{json .DriverStatus}}' | grep 'io.containerd.snapshotter' > /dev/null; then
+          LOADED=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+          if [ "$LOADED" != "$CONFIG" ]; then
+            echo "::error::The loaded image ${LOADED} does not have the archived image's config ${CONFIG}."
+            exit 1
+          fi
+        fi
+        # The builder's stage cache is exported already; free its disk before the smoke and scan.
+        docker buildx rm idea-images-builder
+        df -h / "$RUNNER_TEMP"
+        SMOKE_ROOT=$(mktemp -d)
+        trap 'rm -rf "$SMOKE_ROOT"' EXIT
+        mkdir -p "$SMOKE_ROOT/config"
+        cp source/idea/ideactl/test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
+        # The pbs_server wrapper needs the /etc/pbs.conf the scheduler role writes at start;
+        # the binary answers alone. The runner's own user keeps the generated files removable.
+        docker run --rm --network none --env IDEA_CLUSTER_NAME=smoke --env AWS_DEFAULT_REGION=us-east-1 --env AWS_EC2_METADATA_DISABLED=true --entrypoint python3.13 "$IMAGE" -c 'import asyncssh, ideaclustermanager.app.cluster_manager_app, ideascheduler.app.scheduler_app, ideascheduler.app.sync_users, ideavirtualdesktopcontroller.app.virtual_desktop_controller_app'
+        docker run --rm --entrypoint /bin/bash "$IMAGE" -c '/opt/pbs/sbin/pbs_server.bin --version'
+        # check-update exits 100 when the latest AL2023 release has a newer package.
+        docker run --rm --entrypoint /bin/bash "$IMAGE" -c "rpm -q openssh-server openssh-clients && dnf -q check-update --releasever=latest 'openssh*'"
+        docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work "$IMAGE" ideactl about
+        # idea-admin.sh checks an image's release from this file; it must hold this build's version.
+        VERSION_FILE=$(sed -nE 's/^IDEA_IMAGE_VERSION_FILE="([^"]+)"$/\1/p' idea-admin.sh)
+        test -n "$VERSION_FILE"
+        test "$(docker run --rm --network none --entrypoint cat "$IMAGE" "$VERSION_FILE" | tr -d '[:space:]')" = "$VERSION"
+        docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
+          --workdir /tmp/work \
+          --volume "$SMOKE_ROOT/values.yml:/tmp/values.yml:ro" \
+          --volume "$SMOKE_ROOT/config:/tmp/config" \
+          "$IMAGE" \
+          ideactl config generate \
+            --values-file /tmp/values.yml \
+            --config-dir /tmp/config \
+            --force
+        test -s "$SMOKE_ROOT/config/config/idea.yml"
+        # Facts only the built image can settle (set-id files, file capabilities, the roles' files),
+        # checked as root in a throwaway container with no network and no credentials. A tree
+        # without the script fails here rather than skipping the check.
+        test -f deployment/ecr/idea-control-plane/image_check.sh
+        docker run --rm --network none --user 0 --entrypoint /bin/bash \
+          -v "$PWD/deployment/ecr/idea-control-plane/image_check.sh:/tmp/image_check.sh:ro" \
+          "$IMAGE" /tmp/image_check.sh
+        {
+          echo "local=${IMAGE}"
+          echo "digest=${DIGEST}"
+          echo "archive_sha256=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+        } >> "$GITHUB_OUTPUT"
+    - name: Scan the image for known vulnerabilities
+      # Blocking. Fails on HIGH or CRITICAL findings that have a fixed package; triage and the
+      # accepted findings are in .github/image-scan-allowlist.
+      shell: bash
+      env:
+        IMAGE: ${{ steps.image.outputs.local }}
+        # Renovate proposes the version; its PR must also take the Linux-ARM64 line of that
+        # release's trivy_<version>_checksums.txt into SCANNER_SHA256, or the scan fails closed.
+        # renovate: datasource=github-releases depName=aquasecurity/trivy
+        SCANNER_VERSION: 0.76.2
+        SCANNER_SHA256: ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3
+      run: |
+        bash scripts/ci-scan-image.sh "$IMAGE"
+        df -h / "$RUNNER_TEMP"

@@ -4,8 +4,11 @@
 # entry, so an OpenSSH 10 client warns on every connection even though sshd 9.9 supports
 # mlkem768x25519-sha256. A drop-in sorted before the policy's include wins, because sshd keeps the
 # first value of a keyword. Only the algorithms this sshd knows are named, so an older OpenSSH
-# (Rocky 9 ships 8.7) still starts, and the policy's own list follows so older clients still connect.
+# (EL 8 ships 8.0) still starts, and the policy's own list follows so older clients still connect.
 if command -v sshd > /dev/null 2>&1; then
+  # Socket-activated sshd (Ubuntu 24.04 on) leaves this to the service, which has not started yet,
+  # and without it sshd -T and sshd -t both refuse to run, so the drop-in was always rejected.
+  install -d -m 0755 /run/sshd
   IDEA_PQ_KEX=$(ssh -Q kex 2>/dev/null | grep -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)
   # Drop the post-quantum names from the policy list so a re-run (the running-desktop refresh) does not repeat them.
   IDEA_POLICY_KEX=$(sshd -T 2>/dev/null | awk '/^kexalgorithms /{print $2}' | tr ',' '\n' | grep -v -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)

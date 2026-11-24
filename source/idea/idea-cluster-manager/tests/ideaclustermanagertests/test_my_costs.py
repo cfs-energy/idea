@@ -1121,9 +1121,15 @@ def test_a_desktop_deleted_before_the_window_is_excluded():
     service.get_summary(USER)
 
     # the query itself excludes it: nothing that stopped before the window starts is
-    # asked for, so a long dead desktop never reaches the page
+    # asked for unless it is still live, so a long dead desktop never reaches the page
     _, body = next(query for query in os_client.queries if 'user_sessions' in query[0])
-    ranges = [entry for entry in body['query']['bool']['filter'] if 'range' in entry]
+    clause = body['query']['bool']
+    assert clause['minimum_should_match'] == 1
+    live = next(
+        entry['terms']['state.raw'] for entry in clause['should'] if 'terms' in entry
+    )
+    assert 'DELETED' not in live
+    ranges = [entry for entry in clause['should'] if 'range' in entry]
     updated_lower_bound = next(
         entry['range']['updated_on']['gte']
         for entry in ranges
@@ -1385,12 +1391,15 @@ def test_a_history_read_that_fails_leaves_the_live_desktops_alone():
         },
         prices={'m5.large': 0.1},
     )
-    # the fake context has no history table wired for this case; the read fails and is
-    # swallowed, because history is additive and must not take the page down
+    # the page stays up with what is known, and says it is not the whole figure
+    service._history_table = lambda: (_ for _ in ()).throw(RuntimeError('throttled'))
     desktops = service.get_summary(USER).desktops
 
     assert desktops.session_count == 1
     assert desktops.sessions[0].name == 'sess-live'
+    assert desktops.is_unavailable is True
+    assert service.desktops_complete is False
+    assert service.desktop_records is None
 
 
 @pytest.mark.parametrize('real_stop_hours', [24, None, 96])

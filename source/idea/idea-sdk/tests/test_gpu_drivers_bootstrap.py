@@ -404,6 +404,7 @@ function dnf () {
       mkdir -p "${KERNEL_SRC_DIR}/${TEST_DNF_KERNEL}"
     elif [[ "${SPEC}" == kernel* && "${SPEC}" != *modules-extra* ]]; then
       touch "${KERNEL_BOOT_DIR}/vmlinuz-${TEST_DNF_KERNEL}"
+      [[ -n "${TEST_NO_INITRAMFS:-}" ]] || echo x > "${KERNEL_BOOT_DIR}/initramfs-${TEST_DNF_KERNEL}.img"
     fi
   done
 }
@@ -438,9 +439,16 @@ def run_kernel_header_prep(
             f'#!/bin/bash\n{KERNEL_INCLUDE}\n{HARNESS}\n{KERNEL_HARNESS}\n{block}\n'
         )
 
+    # placeholder images: a host's own lister would reject them
+    lister = os.path.join(base_dir, 'bin', 'lsinitrd')
+    os.makedirs(os.path.dirname(lister), exist_ok=True)
+    with open(lister, 'w') as f:
+        f.write('#!/bin/sh\n')
+    os.chmod(lister, 0o755)
     env = dict(os.environ)
     env.update(
         {
+            'PATH': f'{os.path.dirname(lister)}:{os.environ["PATH"]}',
             'BOOTSTRAP_DIR': bootstrap_dir,
             'GPU_PCI_DEVICES_DIR': pci_dir,
             'TEST_INSTANCE_TYPE': 'g4dn.xlarge',
@@ -519,6 +527,28 @@ def test_missing_kernel_devel_fails_bootstrap_instead_of_building(context, tmp_p
 
 
 @pytest.mark.skipif(BASH is None, reason='bash is not available')
+def test_a_repo_kernel_with_no_initramfs_is_never_booted_for_its_headers(
+    context, tmp_path
+):
+    rendered = render_gpu_drivers(context.config(), instance_type='g4dn.xlarge')
+    result, bootstrap_dir = run_kernel_header_prep(
+        tmp_path,
+        rendered,
+        {
+            'TEST_DNF_RESOLVES': (
+                'dkms kernel6.12 kernel6.12-devel kernel6.12-modules-extra'
+            ),
+            'TEST_DNF_KERNEL': REPO_KERNEL,
+            'TEST_NO_INITRAMFS': '1',
+        },
+        stale_kernel=True,
+    )
+    assert 'reboot' not in read_file(bootstrap_dir, 'reboot.log')
+    assert '--set-default' not in read_file(bootstrap_dir, 'grubby.log').replace(
+        f'--set-default {tmp_path}/boot/vmlinuz-{RUNNING_KERNEL}', ''
+    )
+
+
 def test_superseded_ami_kernel_boots_the_kernel_the_repo_carries(context, tmp_path):
     # the running kernel has aged out of the repo: install the kernel the repo does carry and
     # re-enter the calling bootstrap script after a reboot.

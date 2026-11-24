@@ -91,8 +91,12 @@ In `.github/workflows/build_push.yaml`, the deps worker must add to the existing
 
 No other build workflow edits are needed. PRs, forks and non-main dispatches skip
 `private-parity`; public checks still run. Protect main and workflow edits because
-main code can read the captures. The private job uses a fresh GitHub-hosted Ubuntu
-runner, with no dependency caches or artifact uploads. Test output is kept in a
+main code can read the captures. `private-parity-build` installs and builds the tree
+in a job without an OIDC token and hands it on as a one-day artifact; the
+`private-parity` job, the only one that can request the token, installs and builds
+nothing and uploads nothing. After the fetch, the tests run in a network namespace with
+only loopback and an environment of named variables only, so test and dependency code
+that can read the captures has no network path out and no job credential. Test output is kept in a
 0700 temporary directory, only numeric totals are published, and all captures
 and logs are deleted on completion. For failures, reproduce locally with the
 approved bundle; do not paste capture-derived assertions into public logs.

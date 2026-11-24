@@ -12,7 +12,7 @@ EFS uses the existing measured-storage path. To collect ONTAP quota shares and e
 
 1. Open **Administration > Settings > Costs > Storage cost collection**.
 2. Enable storage collection. The metrics provider must be CloudWatch or DogStatsD.
-3. For each ONTAP attachment, enter a read-only ONTAP account name.
+3. For each ONTAP attachment, enter a read-only ONTAP account name. Attachments on the same SVM are read through one login, so one of them is enough.
 4. Store its password in Secrets Manager and enter the secret ARN. Do not enter the password in Settings.
 5. Save the settings, deploy any required secret or KMS permissions, and restart cluster-manager.
 6. Wait for storage collection and the personal-cost refresh. Storage collection normally runs hourly. Personal-cost collection runs every 15 minutes and checks refresh requests each minute.

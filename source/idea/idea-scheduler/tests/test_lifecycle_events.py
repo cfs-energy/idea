@@ -5,6 +5,7 @@ Test Cases for ProvisioningLifecycleEvents
 import datetime
 import json
 import os
+from unittest.mock import Mock
 
 import pytest
 
@@ -289,7 +290,11 @@ def test_lifecycle_events_disposition_held_is_inferred_from_state(
     recorded identically, a job the platform gave up on cannot be told from one somebody
     deleted. 'held' is what makes a retry-capped job legible in Completed Jobs.
     """
-    job = make_job(state=SocaJobState.HELD, provisioned=True)
+    job = make_job(
+        state=SocaJobState.HELD,
+        provisioned=True,
+        reason_class=REASON_CLASS_RETRIES_EXHAUSTED,
+    )
     lifecycle_events.job_disposition(job=job)
     assert recorder.events[0]['disposition'] == DISPOSITION_HELD
 
@@ -443,6 +448,70 @@ def test_provision_jobs_emits_stack_failed_on_failed_status(context, recorder):
         assert event['event_type'] == EVENT_TYPE_STACK_FAILED
         assert event['error_code'] == errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED
         assert event['reason_class'] == REASON_CLASS_CLOUDFORMATION
+    finally:
+        context.lifecycle_events = None
+
+
+@pytest.mark.parametrize(
+    'raised_by, error_code, counted, event_type',
+    [
+        # a designed wait: the job comes back every cycle until quota frees up
+        (
+            'check_service_quota',
+            errorcodes.SERVICE_QUOTA_NOT_AVAILABLE,
+            0,
+            EVENT_TYPE_CAPACITY_WAIT,
+        ),
+        ('ec2_dry_run', errorcodes.EC2_DRY_RUN_FAILED, 1, EVENT_TYPE_STACK_FAILED),
+    ],
+)
+def test_provisioning_failures_counts_failures_and_not_designed_waits(
+    context, recorder, monkeypatch, raised_by, error_code, counted, event_type
+):
+    """
+    emission point: ProvisionJobs.invoke, a SocaException raised creating a new stack
+    """
+    from ideadatamodel import ProvisioningStatus
+    from ideasdk.metrics.health import HealthMetrics
+    from ideascheduler.app.provisioning.job_provisioner.job_provisioner import (
+        ProvisionJobs,
+    )
+
+    added = []
+    monkeypatch.setattr(
+        HealthMetrics, 'add', lambda self, name, value=1, **tags: added.append(name)
+    )
+    # the older per-queue metric, sent for both
+    monkeypatch.setattr(context, 'metrics', Mock(), raising=False)
+    emitter = ProvisioningLifecycleEvents(context=context)
+    emitter._event_logger = recorder
+    context.lifecycle_events = emitter
+    try:
+        job = make_job(
+            params=SocaJobParams(
+                compute_stack='idea-mock-compute-onDemand-100',
+                job_group='g1234',
+                instance_types=['c5.large'],
+            )
+        )
+        provision_jobs = ProvisionJobs(
+            context=context, jobs=[job], logger=context.logger('test')
+        )
+        provision_jobs._provisioning_status = ProvisioningStatus.NOT_PROVISIONED
+        util = provision_jobs.provisioning_util
+        for check in ('check_budgets', 'check_bedrock', 'ec2_dry_run'):
+            monkeypatch.setattr(util, check, lambda: None)
+
+        def refuse():
+            raise exceptions.soca_exception(error_code=error_code, message='refused')
+
+        monkeypatch.setattr(util, raised_by, refuse)
+
+        result = provision_jobs.invoke()
+
+        assert (result.status, result.error_code) == (False, error_code)
+        assert [e['event_type'] for e in recorder.events] == [event_type]
+        assert added.count('scheduler.provisioning_failures') == counted
     finally:
         context.lifecycle_events = None
 

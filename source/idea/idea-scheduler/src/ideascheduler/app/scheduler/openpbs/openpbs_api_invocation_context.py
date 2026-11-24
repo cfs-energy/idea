@@ -36,6 +36,10 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api import (
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
 from ideascheduler.app.scheduler import SocaJobBuilder
+from ideascheduler.app.scheduler.job_param_builder import (
+    COMPUTED_JOB_GROUP_PATTERN,
+    JOB_UID_PATTERN,
+)
 from ideascheduler.app.scheduler.pbs_select import (
     select_chunks,
     chunk_resources,
@@ -86,6 +90,112 @@ class OpenPBSAPIInvocationContext:
 
         self._job_submission_result = SubmitJobResult()
 
+    @staticmethod
+    def _default_existing_fsx(queue_profile) -> Optional[str]:
+        default_params = queue_profile.default_job_params if queue_profile else None
+        default_fsx = default_params.fsx_lustre if default_params else None
+        return default_fsx.existing_fsx if default_fsx else None
+
+    def _default_existing_fsx_of(self, queue_name: Optional[str]) -> Optional[str]:
+        if Utils.is_empty(queue_name):
+            return None
+        try:
+            return self._default_existing_fsx(
+                self.app_context.queue_profiles.get_queue_profile(queue_name=queue_name)
+            )
+        except exceptions.SocaException:
+            # a source queue with no profile pinned nothing
+            return None
+
+    def _refuse_move_keeping_another_queues_fsx(
+        self, queue_profile, queue_name: str, moved_fsx: Optional[str]
+    ):
+        """
+        Resource_List is read-only to a movejob hook (the PBS hooks matrix, copied in
+        openpbs_hook_handler.JOB_PARAM_EVENT_TYPE_MATRIX), so the target queue's value
+        cannot be relied on to replace the one the job carries. a job carrying a queue's
+        pinned file system into a queue that restricts fsx_lustre and resolves to another
+        value would run with it: the move is refused instead (rereview3 S2)
+        """
+        if not moved_fsx:
+            return
+        params = queue_profile.queue_management_params if queue_profile else None
+        restricted = Utils.get_as_list(
+            params.restricted_parameters if params else None, []
+        )
+        if constants.JOB_PARAM_FSX_LUSTRE not in restricted:
+            return
+        fsx = self._job.params.fsx_lustre if self._job.params else None
+        resolved = fsx.existing_fsx if fsx is not None and fsx.enabled else None
+        if resolved == moved_fsx:
+            return
+        self.add_job_validation_entry(
+            error_code=errorcodes.INVALID_PARAMS,
+            message=f'This job uses the FSx for Lustre file system {moved_fsx}, the '
+            f'default of queue {self.event.src_queue}. Queue {queue_name} does not let '
+            f'jobs set fsx_lustre, so the job cannot keep it there. Submit the job to '
+            f'queue {queue_name} instead of moving it.',
+        )
+
+    def _refuse_move_of_bound_job(self, queue_name: str):
+        """
+        a movejob hook may only read the job, so a job whose selector already names a
+        node of its queue's stack (held jobs keep it) cannot be unbound: accepted, it sat
+        in the target queue bound to the source queue's capacity. it is refused instead
+        """
+        if not self._moved_job_is_bound():
+            return
+        self.add_job_validation_entry(
+            error_code=errorcodes.INVALID_PARAMS,
+            message=f'This job already has a node from queue {self.event.src_queue}, '
+            f'so it cannot be moved to queue {queue_name}. Delete it and submit it to '
+            f'queue {queue_name}, or move a job before it is given a node.',
+        )
+
+    def _moved_job_is_bound(self) -> bool:
+        """a move of a job whose node selector names its stack: PBS keeps a provisioned
+        job's node in schedselect, which the select of its request may not show"""
+        if self.event.type != 'movejob' or self.event.job is None:
+            return False
+        select = self.event.job.get_select() or ''
+        return 'compute_node=' in select and 'compute_node=tbd' not in select
+
+    def _bound_to_capacity(self) -> bool:
+        """an edit of a job whose node selector names its stack"""
+        if self.event.type != 'modifyjob' or self.event.job_o is None:
+            return False
+        select = (self.event.job_o.Resource_List or {}).get('select') or ''
+        return 'compute_node=' in select and 'compute_node=tbd' not in select
+
+    @staticmethod
+    def _without_computed_group(params: dict) -> tuple:
+        """
+        a group of the computed form (g + hex) is the scheduler's, never a submitter's
+        (only custom-... passes validation), so one carried on an edited or moved job is
+        not checked as the submitter's and is computed again from the request as it is
+        now: carried over, an edit kept the group of its old request and was sent to that
+        group's stack. a custom group stays.
+        """
+        group = params.get('job_group')
+        if group and COMPUTED_JOB_GROUP_PATTERN.fullmatch(str(group)):
+            return {k: v for k, v in params.items() if k != 'job_group'}, str(group)
+        return params, None
+
+    def _cached_job_uid(self) -> Optional[str]:
+        for pbs_job in (self.event.job_o, self.event.job):
+            job_id = (
+                str(pbs_job.id).split('.')[0]
+                if pbs_job is not None and pbs_job.id
+                else ''
+            )
+            if job_id and job_id.lower() != 'tbd':
+                try:
+                    cached = self.app_context.job_cache.get_job(job_id)
+                except Exception:
+                    return None
+                return cached.job_uid if cached is not None else None
+        return None
+
     def build_and_validate_job(self):
         try:
             queue_name = None
@@ -107,12 +217,37 @@ class OpenPBSAPIInvocationContext:
                 if Utils.is_not_empty(self.event.job.project):
                     project_name = self.event.job.project
 
+            # an existing job keeps its uid: its package and completion record are under
+            # it. an edit whose job_o carried none minted a new one and wrote it back
+            self.existing_uid_unknown = False
+            if Utils.is_empty(job_uid) and self.event.type == 'modifyjob':
+                job_uid = self._cached_job_uid()
+                self.existing_uid_unknown = Utils.is_empty(job_uid)
             if Utils.is_empty(job_uid):
                 job_uid = Utils.short_uuid()
 
             # create temporary job, in case of queue profile not found or disabled errors
             # and correlate with job submission handler
             self._job = SocaJob(job_uid=job_uid, owner=self._owner_username())
+
+            # job_uid names the bootstrap package a compute node downloads as root, so a
+            # value carried on the job must keep the letters, digits, underscores and dashes it is made of.
+            if not JOB_UID_PATTERN.fullmatch(str(job_uid)):
+                raise exceptions.invalid_params(
+                    f'job_uid can only contain letters, digits, underscores and dashes: ({job_uid})'
+                )
+            # the completion record is stored under job_uid, so a value the submitter
+            # chose must not be another job's: that job's record would be replaced
+            supplied_uid = (
+                self.event.type == 'queuejob'
+                and self.event.job is not None
+                and Utils.is_not_empty(self.event.job.get_job_uid())
+            )
+            if supplied_uid and self.app_context.job_cache.is_job_uid_taken(job_uid):
+                raise exceptions.invalid_params(
+                    f'job_uid {job_uid} already belongs to another job. Leave job_uid '
+                    f'out and IDEA assigns one.'
+                )
 
             # if no queue or project is specified during job submission, default queue name to 'normal'
             if Utils.is_empty(queue_name):
@@ -144,7 +279,38 @@ class OpenPBSAPIInvocationContext:
             ):
                 self.event.job.project = project_name
 
+            # the queue's default existing FSx was written onto the job at submission; on
+            # an edit or move that does not touch fsx_lustre it is the queue's value, not
+            # the job's, so it is left to the default again: read back as the job's own it
+            # was refused on queues that restrict fsx_lustre (A-S3). a move carries the
+            # whole job in event.job, so there the value equal to the source or target
+            # queue's default is the pinned one (S1)
+            pinned_values = {self._default_existing_fsx(queue_profile)}
+            if self.event.type == 'movejob':
+                pinned_values.add(self._default_existing_fsx_of(self.event.src_queue))
+            pinned_values.discard(None)
+            pinned = old_job_params.get('fsx_lustre')
+            if 'fsx_lustre' not in job_params and pinned and pinned in pinned_values:
+                old_job_params = {
+                    k: v for k, v in old_job_params.items() if k != 'fsx_lustre'
+                }
+            moved_fsx = None
+            if (
+                self.event.type == 'movejob'
+                and job_params.get('fsx_lustre')
+                and job_params['fsx_lustre'] in pinned_values
+            ):
+                moved_fsx = job_params['fsx_lustre']
+                job_params = {k: v for k, v in job_params.items() if k != 'fsx_lustre'}
+            carried_group = None
+            if self.event.type in ('modifyjob', 'movejob'):
+                old_job_params, old_group = self._without_computed_group(old_job_params)
+                job_params, new_group = self._without_computed_group(job_params)
+                carried_group = new_group or old_group
             job_params = {**old_job_params, **job_params}
+            # the subnet a multi-node job draws is seeded by its uid, which the job keeps
+            # from submission on, so the group stored now is the one a later read computes
+            job_params.setdefault('job_uid', job_uid)
             self._job_builder = SocaJobBuilder(
                 context=self.app_context,
                 params=job_params,
@@ -170,7 +336,22 @@ class OpenPBSAPIInvocationContext:
             self._job.job_uid = job_uid
 
             self._job_validation_result: Optional[JobValidationResult] = None
-            self._job_validation_result = self.job_builder.validate()
+            moved_bound = self._moved_job_is_bound()
+            if moved_bound:
+                # decided first: the move cannot change the job's node, so its request is
+                # not checked in the destination queue and the owner reads one reason
+                self._job_validation_result = JobValidationResult(results=[])
+            else:
+                self._job_validation_result = self.job_builder.validate()
+            if carried_group and (self._bound_to_capacity() or moved_bound):
+                # a job on a stack keeps the group that names the stack
+                self._job.job_group = carried_group
+                self._job.params.job_group = carried_group
+            self._refuse_move_of_bound_job(queue_name)
+            if not moved_bound:
+                self._refuse_move_keeping_another_queues_fsx(
+                    queue_profile, queue_name, moved_fsx
+                )
 
         except exceptions.SocaException as e:
             if e.error_code in (
@@ -478,10 +659,14 @@ class OpenPBSAPIInvocationContext:
                         not_requested = result.find_insufficient_quotas()
 
                         if len(not_requested) > 0:
-                            message = f'Following AWS Service Quota needs to be requested from AWS: {os.linesep}'
                             table = self.get_quotas_as_table(not_requested)
-                            message += str(table)
-                            message += f'{os.linesep} Please contact administrator to request these AWS Service Quotas.'
+                            self.app_context.logger().warning(
+                                f'{self.job.log_tag} - quota too low:{os.linesep}{table}'
+                            )
+                            message = (
+                                'This job needs more AWS capacity than this cluster is '
+                                'allowed. Ask an administrator to request a higher quota.'
+                            )
                             self.add_incidentals_validation_entry(
                                 error_code='ServiceQuota', message=message
                             )
@@ -524,11 +709,15 @@ class OpenPBSAPIInvocationContext:
                     GetHpcLicenseResourceRequest(name=license_ask.name)
                 )
             except exceptions.SocaException as e:
+                self.app_context.logger().warning(
+                    f'{self.job.log_tag} - license {license_ask.name}: {e.message}'
+                )
                 licenses_resolved = False
                 self.add_incidentals_validation_entry(
                     error_code='Licenses.NotFound',
-                    message=f'License resource: ({license_ask.name}) is not configured. '
-                    f'The job can never be provisioned. Err: {e.message}',
+                    message=f"License {license_ask.name} isn't set up on this cluster, so this "
+                    f'job could never start. Remove it from your job script, or ask an '
+                    f'administrator.',
                 )
 
         if not licenses_resolved:

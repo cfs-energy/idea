@@ -160,7 +160,7 @@ export function registerCostCollectorCommands(program: Command, deps: Deps, read
     .requiredOption("--datadog-api-key-secret-arn <arn>", "Datadog API key secret ARN")
     .requiredOption("--subnet-ids <ids...>", "Subnets in one VPC, all public or all private")
     .option("--interval-hours <hours>", "Collection interval", positiveInteger, 24)
-    .option("--lookback-days <days>", "Trailing full days", positiveInteger, 3)
+    .option("--lookback-days <days>", "Trailing full days", positiveInteger, 7)
     .option("--module-tag <key>", "Module cost allocation tag", "idea:ModuleId")
     .option("--project-tag <key>", "Project cost allocation tag", "idea:Project")
     .option("--owner-tag <key>", "Owner cost allocation tag", "idea:JobOwner")

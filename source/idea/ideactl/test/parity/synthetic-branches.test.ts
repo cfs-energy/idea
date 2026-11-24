@@ -113,17 +113,6 @@ const BRANCHES: BranchSpec[] = [
     absent: ["directoryservice.hostname"],
   },
   {
-    branch: "storage fsx_lustre",
-    file: "storage-fsx-lustre.yml",
-    present: {
-      "shared-storage.apps.provider": "fsx_lustre",
-      "shared-storage.data.provider": "fsx_lustre",
-      "shared-storage.apps.fsx_lustre.storage_type": "SSD",
-      "shared-storage.data.fsx_lustre.storage_capacity": 1200,
-    },
-    absent: ["shared-storage.apps.efs.performance_mode"],
-  },
-  {
     branch: "storage existing apps fs",
     file: "storage-existing-apps-fs.yml",
     present: {
@@ -270,7 +259,8 @@ function inputFiles(): string[] {
 
 describe("synthetic fixtures cover each generator branch", () => {
   it("names every YAML file in this directory as a branch input", () => {
-    assert.deepStrictEqual(yamlFiles(), inputFiles());
+    // storage-fsx-lustre.yml is the refused branch, checked below
+    assert.deepStrictEqual(yamlFiles().filter((file) => file !== "storage-fsx-lustre.yml"), inputFiles());
   });
 
   const baseline = generateFlat(BASE_FILE);
@@ -340,5 +330,11 @@ describe("synthetic fixtures carry no live account data", () => {
         assert.ok(allowed, `${name} contains hostname ${host}`);
       }
     }
+  });
+});
+
+describe("the generator's FSx for Lustre apps and data branch", () => {
+  it("is refused: Lustre is for job scratch only", () => {
+    assert.throws(() => generateFlat("storage-fsx-lustre.yml"), /FSx for Lustre is not supported for the apps storage/);
   });
 });

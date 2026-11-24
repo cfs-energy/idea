@@ -16,7 +16,7 @@
 
 import {clientsClaim} from 'workbox-core'
 import 'workbox-precaching'
-import {IdeaAuthenticationContext} from "./common/authentication-context";
+import {IdeaAuthenticationContext, isSameOrigin} from "./common/authentication-context";
 import {Constants} from "./common/constants";
 
 declare const self: ServiceWorkerGlobalScope
@@ -41,6 +41,11 @@ self.addEventListener('message', (event) => {
                 self.skipWaiting()
                 break
             case Constants.ServiceWorker.IDEA_AUTH_INIT:
+                // renewals post the refresh token to this endpoint: only the portal's own origin is accepted
+                if (!isSameOrigin(event.data.options?.authEndpoint, self.location.origin)) {
+                    event.ports?.[0]?.postMessage({status: false})
+                    break
+                }
                 IDEA_AUTH_CONTEXT.initializeAuthContext(event.data.options).then(status => {
                     if(event.ports && event.ports.length > 0) {
                         event.ports[0].postMessage({
@@ -81,9 +86,6 @@ self.addEventListener('message', (event) => {
                         error: error
                     })
                 })
-                break
-            case Constants.ServiceWorker.IDEA_AUTH_DEBUG:
-                IDEA_AUTH_CONTEXT.printDebugInfo()
                 break
             case Constants.ServiceWorker.IDEA_AUTH_LOGOUT:
                 IDEA_AUTH_CONTEXT.logout().then(status => {
@@ -126,7 +128,8 @@ self.addEventListener('message', (event) => {
                     IDEA_AUTH_CONTEXT.invoke(
                         event.data.options.url,
                         event.data.options.request,
-                        event.data.options.isPublic
+                        event.data.options.isPublic,
+                        event.data.options.timeout
                     ).then(result => {
                         event.ports[0].postMessage({
                             response: result

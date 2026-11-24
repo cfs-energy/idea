@@ -20,6 +20,7 @@ from ideaclustermanager.app.accounts.reconcile_settings import (
 from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirectory
 from ideasdk.metrics import BaseMetrics
 from ideasdk.service import SocaService
+from ideasdk.utils import Utils
 
 
 class ReconcileUsersRequest(SocaBaseModel):
@@ -35,6 +36,7 @@ class AccountReconcileMetrics(BaseMetrics):
             'reenabled',
             'missing',
             'errors',
+            'home_errors',
             'refused',
             'homes_converged',
             'trees_queued',
@@ -206,78 +208,92 @@ class AccountReconciler(SocaService):
     def _reconcile_homes(self, users, dry_run, report):
         for listed_user in users:
             self.assert_lease()
-            metadata = (
-                self.context.accounts.user_dao.get_user(listed_user.username) or {}
-            )
-            user = copy(listed_user)
-            for field in ('enabled', 'uid', 'gid', 'home_dir'):
-                if field in metadata:
-                    setattr(user, field, metadata[field])
-            if not user.enabled or not user.home_dir or metadata.get('disable_pending'):
-                continue
-            pending_uid = metadata.get('home_ownership_stale_uid')
-
-            def remember_stale_uid(stale_uid):
-                nonlocal pending_uid
+            try:
+                self._reconcile_home(listed_user, dry_run, report)
+            except Exception as error:
+                # a lost lease stops the run; anything else is this account's failure
                 self.assert_lease()
-                self.context.accounts.user_dao.update_user(
-                    {
-                        'username': user.username,
-                        'home_ownership_stale_uid': stale_uid,
-                    }
+                report['home_errors'] += 1
+                report['home_changes'].append(
+                    dict(username=listed_user.username, error=type(error).__name__)
                 )
-                pending_uid = stale_uid
+                self.logger.error(
+                    f'home reconciliation failed for {listed_user.username}: '
+                    f'{type(error).__name__}'
+                )
 
-            home = UserHomeDirectory(self.context, user)
-            result = home.converge_login_paths(
-                dry_run=dry_run,
-                assert_lease=self.assert_lease,
-                remember_stale_uid=remember_stale_uid,
+    def _reconcile_home(self, listed_user, dry_run, report):
+        metadata = self.context.accounts.user_dao.get_user(listed_user.username) or {}
+        user = copy(listed_user)
+        # the table returns numbers as Decimal, which no OS call takes: the
+        # stored values pass through the model's conversion
+        stored = (
+            self.context.accounts.user_dao.convert_from_db(metadata)
+            if metadata
+            else None
+        )
+        for field in ('enabled', 'uid', 'gid', 'home_dir'):
+            if field in metadata:
+                setattr(user, field, getattr(stored, field))
+        if not user.enabled or not user.home_dir or metadata.get('disable_pending'):
+            return
+        pending_uid = Utils.get_value_as_int('home_ownership_stale_uid', metadata)
+
+        def remember_stale_uid(stale_uid):
+            nonlocal pending_uid
+            self.assert_lease()
+            self.context.accounts.user_dao.update_user(
+                {
+                    'username': user.username,
+                    'home_ownership_stale_uid': stale_uid,
+                }
             )
-            report['errors'] += result.failed
-            if result.changed:
-                report['would_homes_converge'] += 1
-                if not dry_run and not result.failed:
-                    report['homes_converged'] += 1
-            stale_uid = pending_uid if pending_uid is not None else result.stale_uid
-            tree_needed = stale_uid is not None and stale_uid != user.uid
-            if tree_needed:
-                report['would_trees_queue'] += 1
-                if not dry_run:
-                    self.assert_lease()
-                    try:
-                        self.context.accounts.task_manager.send(
-                            task_name='accounts.repair-home-ownership',
-                            payload={
-                                'username': user.username,
-                                'dry_run': False,
-                                # The login path already has its authoritative owner.
-                                'stale_uid': stale_uid,
-                            },
-                            message_group_id=user.username,
-                        )
-                    except Exception as error:
-                        report['errors'] += 1
-                        self.logger.warning(
-                            f'home repair enqueue failed: {user.username}: {type(error).__name__}'
-                        )
-                    else:
-                        report['trees_queued'] += 1
-                        result.queued = True
-                        result.task_name = 'accounts.repair-home-ownership'
-                        self.assert_lease()
-                        self.context.accounts.user_dao.update_user(
-                            {
-                                'username': user.username,
-                                'home_ownership_stale_uid': None,
-                            }
-                        )
-            if result.changed or result.failed or tree_needed:
-                report['home_changes'].append(result.model_dump())
-                self.logger.info(
-                    f'home reconciliation: username={user.username} dry_run={dry_run} '
-                    f'stale_uid={stale_uid} changed={result.changed} failed={result.failed} tree_needed={tree_needed}'
-                )
+            pending_uid = stale_uid
+
+        home = UserHomeDirectory(self.context, user)
+        result = home.converge_login_paths(
+            dry_run=dry_run,
+            assert_lease=self.assert_lease,
+            remember_stale_uid=remember_stale_uid,
+        )
+        report['home_errors'] += result.failed
+        if result.changed:
+            report['would_homes_converge'] += 1
+            if not dry_run and not result.failed:
+                report['homes_converged'] += 1
+        stale_uid = pending_uid if pending_uid is not None else result.stale_uid
+        tree_needed = stale_uid is not None and stale_uid != user.uid
+        if tree_needed:
+            report['would_trees_queue'] += 1
+            if not dry_run:
+                self.assert_lease()
+                try:
+                    self.context.accounts.task_manager.send(
+                        task_name='accounts.repair-home-ownership',
+                        payload={
+                            'username': user.username,
+                            'dry_run': False,
+                            # The login path already has its authoritative owner.
+                            'stale_uid': stale_uid,
+                        },
+                        message_group_id=user.username,
+                    )
+                except Exception as error:
+                    report['home_errors'] += 1
+                    self.logger.warning(
+                        f'home repair enqueue failed: {user.username}: {type(error).__name__}'
+                    )
+                else:
+                    report['trees_queued'] += 1
+                    result.queued = True
+                    result.task_name = 'accounts.repair-home-ownership'
+                    # the repair clears the recorded owner once it has finished
+        if result.changed or result.failed or tree_needed:
+            report['home_changes'].append(result.model_dump())
+            self.logger.info(
+                f'home reconciliation: username={user.username} dry_run={dry_run} '
+                f'stale_uid={stale_uid} changed={result.changed} failed={result.failed} tree_needed={tree_needed}'
+            )
 
     def _reconcile(self, dry_run, override_max_disable_fraction=False, settings=None):
         report = dict(
@@ -287,6 +303,8 @@ class AccountReconciler(SocaService):
             reenabled=0,
             missing=0,
             errors=0,
+            # apart from errors: those are the upstream reads the safety cap counts
+            home_errors=0,
             refused=0,
             homes_converged=0,
             trees_queued=0,
@@ -362,9 +380,13 @@ class AccountReconciler(SocaService):
                     # Credential-bearing requests can put secrets in exception messages.
                     # Only structured failure metadata is safe to persist or log.
                     message = type(error).__name__
-                    response = getattr(error, 'response', None)
-                    if response is not None:
-                        message += f' (HTTP {response.status_code})'
+                    # a requests response has a status code; a botocore error's
+                    # response is a dict, and an error here must not end the run
+                    status = getattr(
+                        getattr(error, 'response', None), 'status_code', None
+                    )
+                    if status is not None:
+                        message += f' (HTTP {status})'
                     report['errors'] += 1
                     report['changes'].append(
                         dict(
@@ -450,6 +472,17 @@ class AccountReconciler(SocaService):
                             )
                             report['disabled'] += 1
                         else:
+                            # an administrator's own disable made since the decision
+                            # leaves no reconcile source: it is not undone
+                            current = (
+                                self.context.accounts.user_dao.get_user(
+                                    change['username']
+                                )
+                                or {}
+                            )
+                            if not current.get('reconcile_sources'):
+                                change['applied'] = False
+                                continue
                             self.context.accounts.enable_user(change['username'])
                             report['reenabled'] += 1
                         change['applied'] = True

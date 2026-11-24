@@ -270,18 +270,19 @@ class InstanceCache(InstanceCacheProtocol):
         queue_profile_metrics = {}
         for instance in compute_instances:
             job_id = instance.soca_job_id
-            job_instance_count = Utils.get_value_as_int('count', job_metrics, 0) + 1
+            # the count was read under the literal key 'count', so every job, group and
+            # profile counted at most 1 instance and max_provisioned_instances never held
+            # (SP-07)
+            job_instance_count = job_metrics.get(job_id, 0) + 1
             job_metrics[job_id] = job_instance_count
 
             job_group = instance.soca_job_group
-            group_instance_count = (
-                Utils.get_value_as_int('count', job_group_metrics, 0) + 1
-            )
+            group_instance_count = job_group_metrics.get(job_group, 0) + 1
             job_group_metrics[job_group] = group_instance_count
 
             queue_profile = instance.soca_queue_type
             queue_profile_instance_count = (
-                Utils.get_value_as_int('count', queue_profile_metrics, 0) + 1
+                queue_profile_metrics.get(queue_profile, 0) + 1
             )
             queue_profile_metrics[queue_profile] = queue_profile_instance_count
 

@@ -53,6 +53,9 @@ ensure_app_certs() {
       [[ -s "${crt}" ]] && break
       sleep 1
     done
+    # a winner that stopped between its two steps left a key with no certificate; clear it so the
+    # next start elects a new writer instead of waiting on this one for good
+    [[ -s "${crt}" ]] || rm -f "${key}"
   fi
   rm -rf "${tmp}"
   if [[ ! -s "${key}" || ! -s "${crt}" ]]; then

@@ -56,6 +56,10 @@ __all__ = (
     'GetSoftwareStackInfoResponse',
     'ListSoftwareStackRequest',
     'ListSoftwareStackResponse',
+    'ExtendSoftwareStackRequest',
+    'ExtendSoftwareStackResponse',
+    'ListOrphanInstancesRequest',
+    'ListOrphanInstancesResponse',
     'ListPermissionsRequest',
     'ListPermissionsResponse',
     'ListSupportedOSRequest',
@@ -101,6 +105,7 @@ from ideadatamodel.virtual_desktop.virtual_desktop_model import (
     VirtualDesktopSessionBatchResponsePayload,
     VirtualDesktopSessionConnectionInfo,
     VirtualDesktopSessionScreenshot,
+    VirtualDesktopOrphanInstance,
     VirtualDesktopSoftwareStack,
     VirtualDesktopPermissionProfile,
     VirtualDesktopPermission,
@@ -202,7 +207,8 @@ class SetSessionCleanupExemptionResponse(SocaPayload):
 class BaseSoftwareStackAmiRefreshResult(SocaPayload):
     stack_id: Optional[str] = Field(default=None)
     # updated (ami_id moved to the newest stock image) | base_updated (only the base
-    # advanced; the stack keeps launching from a built image) | up_to_date | error
+    # advanced; the stack keeps launching from a built image) | up_to_date | unsupported (no
+    # stock image is published for the OS in this partition) | error
     status: Optional[str] = Field(default=None)
     old_ami: Optional[str] = Field(default=None)
     new_ami: Optional[str] = Field(default=None)
@@ -422,6 +428,31 @@ class ListSoftwareStackRequest(SocaListingPayload):
 # VirtualDesktop.ListSoftwareStacks - Request
 class ListSoftwareStackResponse(SocaListingPayload):
     listing: Optional[List[VirtualDesktopSoftwareStack]] = Field(default=None)
+
+
+# VirtualDesktopAdmin.ExtendSoftwareStack - Request
+class ExtendSoftwareStackRequest(SocaPayload):
+    stack_id: Optional[str] = Field(default=None)
+    base_os: Optional[str] = Field(default=None)
+    # the setting's default when absent
+    days: Optional[int] = Field(default=None)
+
+
+# VirtualDesktopAdmin.ExtendSoftwareStack - Response
+class ExtendSoftwareStackResponse(SocaPayload):
+    software_stack: Optional[VirtualDesktopSoftwareStack] = Field(default=None)
+
+
+# VirtualDesktopAdmin.ListOrphanInstances - Request
+class ListOrphanInstancesRequest(SocaPayload):
+    # minutes an instance with no row is given to write one; default 60. 0 lists every
+    # unmatched instance, so a check of the matching can fail while desktops are new
+    min_age_minutes: Optional[int] = Field(default=None)
+
+
+# VirtualDesktopAdmin.ListOrphanInstances - Response
+class ListOrphanInstancesResponse(SocaPayload):
+    listing: Optional[List[VirtualDesktopOrphanInstance]] = Field(default=None)
 
 
 # VirtualDesktopDCV.DescribeServers - Request
@@ -855,6 +886,20 @@ OPEN_API_SPEC_ENTRIES_VIRTUAL_DESKTOP = [
         request=ListSoftwareStackRequest,
         result=ListSoftwareStackResponse,
         is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.ExtendSoftwareStack',
+        request=ExtendSoftwareStackRequest,
+        result=ExtendSoftwareStackResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='VirtualDesktopAdmin.ListOrphanInstances',
+        request=ListOrphanInstancesRequest,
+        result=ListOrphanInstancesResponse,
+        is_listing=False,
         is_public=False,
     ),
     IdeaOpenAPISpecEntry(

@@ -1,4 +1,6 @@
-import {Alert} from '@cloudscape-design/components';
+import {Button} from '@cloudscape-design/components';
+import PortalMessage from '../../components/portal-message';
+import {clearSessionReturn, peekReturnPath, rememberReturnPath} from '../../common/session-return';
 import {AppContext} from '../../common';
 import {hasAccess, permittedViews, resolveTask} from '../../navigation/task-navigation';
 /*
@@ -31,6 +33,7 @@ class IdeaAuthenticatedRoute extends Component<IdeaAuthRouteProps, {sessionExpir
     private checking = false
     private retryTimer?: ReturnType<typeof setTimeout>
     private retryAttempt = 0
+    private wasLoggedIn = false
 
     componentDidMount() {
         this.mounted = true
@@ -92,6 +95,12 @@ class IdeaAuthenticatedRoute extends Component<IdeaAuthRouteProps, {sessionExpir
             const path = this.props.location.pathname + this.props.location.search
             const spinner = <div className="spinner-container" data-testid="access-loading"><div className="spinner"><div/><div/></div></div>
             if (loading && this.authorizedPath !== path) return spinner
+            this.wasLoggedIn = true
+            if (!loading && !isAuthRoute) {
+                const back = peekReturnPath()
+                if (back && back !== path) return <Navigate to={back} replace/>
+                clearSessionReturn()
+            }
             if (isAuthRoute) {
                 return <Navigate to='/'/>
             } else {
@@ -99,7 +108,7 @@ class IdeaAuthenticatedRoute extends Component<IdeaAuthRouteProps, {sessionExpir
                 const viewAccess = resolved && (Array.isArray(resolved.view.access) ? resolved.view.access : [resolved.view.access]);
                 if (!loading && resolved && !(resolved.task.id === 'settings' ? permittedViews(resolved.task, AppContext.get()).length : viewAccess?.some(access => hasAccess(AppContext.get(), access)))) {
                     this.authorizedPath = undefined
-                    return <Alert type="warning" header="Destination unavailable">This destination requires module access and a deployed module.</Alert>
+                    return <PortalMessage type="warning" header="You do not have access to this page" action={<Button href="#/">Go to Home</Button>}>Ask your administrator if you need it.</PortalMessage>
                 }
                 if (!loading) this.authorizedPath = path
                 // Keep the same tree during retries so form state and uploads survive.
@@ -113,6 +122,7 @@ class IdeaAuthenticatedRoute extends Component<IdeaAuthRouteProps, {sessionExpir
             if (isAuthRoute) {
                 return this.props.children
             } else {
+                rememberReturnPath(this.props.location.pathname + this.props.location.search, this.wasLoggedIn)
                 return <Navigate to='/auth/login'/>
             }
         }

@@ -18,7 +18,7 @@ import { FileBrowserClient, ProjectsClient, SchedulerClient } from "../../client
 import { ProjectBedrockModels } from "../../components/common";
 import QueueReference from "./queue-reference";
 import { AppContext } from "../../common";
-import Utils from "../../common/utils";
+import Utils, {decodeFileContent, encodeFileContent} from "../../common/utils";
 import { IdeaSideNavigationProps } from "../../components/side-navigation";
 import IdeaAppLayout, { IdeaAppLayoutProps } from "../../components/app-layout";
 import { withRouter } from "../../navigation/navigation-utils";
@@ -117,7 +117,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
 
     constructor(props: ScriptWorkbenchProps) {
         super(props);
-        console.log("ScriptWorkbench constructor", props);
         this.state = {
             jobScript: "",
             clientSubmissionId: uuid(),
@@ -134,8 +133,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
     }
 
     componentDidMount() {
-        console.log("ScriptWorkbench componentDidMount");
-
         // Detect current mode and set appropriate theme
         const isDarkMode = AppContext.get().isDarkMode();
         const editorTheme = isDarkMode ? 'github_dark' : 'github_light_default';
@@ -221,12 +218,12 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         this.getFileBrowserClient().readFile({
             file: filePath
         }).then(result => {
-            if (result.content) {
+            if (result.content != null) {
                 // If we had a successful dry run OR script was already modified, mark as modified
                 const hadSuccessfulDryRun = this.isDryRunSuccessful();
                 const shouldMarkAsModified = hadSuccessfulDryRun || this.state.scriptModifiedSinceDryRun;
                 this.setState({
-                    jobScript: atob(result.content),
+                    jobScript: decodeFileContent(result.content),
                     isLoading: false,
                     scriptModifiedSinceDryRun: shouldMarkAsModified,
                     submitJobResult: hadSuccessfulDryRun ? undefined : this.state.submitJobResult
@@ -396,7 +393,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
 
     submitJob(dryRun: boolean = false) {
         return new Promise((resolve, reject) => {
-            const base64Script = btoa(this.state.jobScript);
+            const base64Script = encodeFileContent(this.state.jobScript);
             this.getSchedulerClient().submitJob({
                 job_script_interpreter: "pbs",
                 job_script: base64Script,
@@ -409,10 +406,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                     // timeout still deduplicates against the first attempt
                     clientSubmissionId: (!dryRun && Utils.asBoolean(result.accepted)) ? uuid() : this.state.clientSubmissionId
                 }, () => {
-                    // Log dry run results to help with debugging
-                    if (dryRun) {
-                        this.logDryRunResults();
-                    }
                     resolve({});
                 });
             }).catch(error => {
@@ -534,7 +527,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                         <div>
                             <Box variant="awsui-key-label">Total</Box>
                             <Box variant="h2">
-                                ${this.formatCurrency(costData.line_items_total?.amount || 0)} {costData.line_items_total?.unit || 'USD'}
+                                {costData.price_unavailable ? 'Price not available' : `$${this.formatCurrency(costData.line_items_total?.amount || 0)} ${costData.line_items_total?.unit || 'USD'}`}
                             </Box>
                         </div>
                         {budget && (
@@ -549,7 +542,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                         )}
                     </ColumnLayout>
 
-                    {costData.line_items && costData.line_items.length > 0 && (
+                    {!costData.price_unavailable && costData.line_items && costData.line_items.length > 0 && (
                         <Table
                             header={<Header variant="h3">By resource</Header>}
                             columnDefinitions={[
@@ -652,7 +645,8 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         }
 
         const job = result.job;
-        const savedAs = job?.name ? `${job.name}_${job.job_uid}` : job?.job_uid;
+        // the scheduler names the script it kept; a name rebuilt here would miss its sanitizing
+        const savedAs = result.job_script_path?.split('/').pop();
         return (
             <SpaceBetween size="l" direction="vertical">
                 <Alert
@@ -660,7 +654,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                     header={`Job ${job?.job_id || ''} submitted`}
                     action={<Button href="#/home/active-jobs">View active jobs</Button>}
                 >
-                    The script is saved as <Box variant="code">~/jobs/{savedAs}.que</Box> for later review or resubmission.
+                    {savedAs && <>The script is saved as <Box variant="code">~/jobs/{savedAs}</Box> for later review or resubmission.</>}
                 </Alert>
                 <Container header={<Header>Job details</Header>}>
                     <Table
@@ -688,21 +682,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         );
     }
 
-    // Add a debugging method to help troubleshoot dry run results
-    logDryRunResults(): void {
-        if (this.isDryRun() && this.state.submitJobResult) {
-            console.log("Dry Run Results:", {
-                isDryRun: this.isDryRun(),
-                validations: this.state.submitJobResult.validations,
-                incidentals: this.state.submitJobResult.incidentals,
-                isDryRunSuccessful: this.isDryRunSuccessful()
-            });
-        }
-    }
-
     render() {
-        console.log("ScriptWorkbench render", this.props, this.state);
-
         const breadcrumbs = [
             {
                 text: 'IDEA',
@@ -881,8 +861,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
             header: <Header variant="h1">Write script</Header>,
             content: content
         };
-
-        console.log("ScriptWorkbench appLayoutProps", appLayoutProps);
 
         return <IdeaAppLayout {...appLayoutProps} />;
     }

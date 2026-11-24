@@ -1,0 +1,31 @@
+# Findings the control-plane image scan accepts. The scan (scripts/ci-scan-image.sh, run by
+# .github/actions/build_control_plane_image on every pull request that changes the image and on
+# every release build) is blocking: it fails on HIGH and CRITICAL findings that have a fixed
+# package version. Findings with no fix yet are not listed (--ignore-unfixed) and do not fail it.
+#
+# "Scanner unavailable", "Scanner checksum mismatch" or "Scanner failed" means the image was not
+# scanned (an outage, not a finding): rerun the job, and never add a line here for it.
+#
+# Triage a "Vulnerabilities found" failure:
+# 1. Read the table above the error. Each row names the package (Library), the advisory
+#    (Vulnerability), its Severity, the Installed Version and the Fixed Version. The header of
+#    each table names where the package came from: the Amazon Linux packages, a Python or Node
+#    lock, or a file inside a vendor package (DCV, OpenPBS, a Java jar).
+# 2. Fix it if you can, in the same pull request:
+#    - Amazon Linux package: the image takes current AL2023 updates on every build; a fix that
+#      is only in a later AL2023 release needs the base image or release pin in the Dockerfile
+#      moved.
+#    - Python or Node package: raise the floor in requirements/*.in or the package manifest and
+#      regenerate the lock.
+#    - Vendor package: move to the vendor release that carries the fix.
+# 3. Accept it here only when the fix cannot be taken yet (the vendor has not shipped it, or the
+#    fixed version breaks IDEA and the break is being worked), or the vulnerable code cannot be
+#    reached in the control plane, and you can say why in one or two lines.
+# 4. Add, in the pull request that needs it:
+#      # <package> <installed version>: <why it is accepted>; <what removes this line>
+#      CVE-0000-00000 exp:YYYY-MM-DD
+#    The reason comment directly above the identifier and the expiry are required, and the
+#    expiry is at most 90 days out (test_ci_pipeline.py enforces both). An expired line stops
+#    applying and the finding fails the build again, to be fixed or re-accepted with a new reason.
+# 5. The release owner decides: a line here is added or extended only in a pull request the
+#    release owner approves. Remove a line as soon as its fix is in.

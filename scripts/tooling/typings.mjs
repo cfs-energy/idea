@@ -53,7 +53,8 @@ export function cleanTypes(content) {
     .split('\n').filter(line => line.trim()).join('\n') + '\n';
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+// true however the path was spelled: spaces, symlinks, relative
+if (import.meta.main) {
   const directory = mkdtempSync(join(tmpdir(), 'idea-typings-'));
   try {
     const schema = join(directory, 'schema.json');

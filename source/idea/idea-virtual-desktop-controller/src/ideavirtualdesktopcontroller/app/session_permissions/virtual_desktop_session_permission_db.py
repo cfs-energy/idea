@@ -9,8 +9,10 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
@@ -120,6 +122,12 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
             key=session_permissions_constants.SESSION_PERMISSIONS_FILTER_SESSION_CREATED_ON_KEY,
             order=SocaSortOrder.ASC,
         )
+
+    @staticmethod
+    def is_expired(session_permission: VirtualDesktopSessionPermission) -> bool:
+        # the scheduled job deletes expired rows only on its next run, so readers check the date
+        expiry_date = session_permission.expiry_date
+        return expiry_date is not None and expiry_date <= datetime.now(timezone.utc)
 
     @staticmethod
     def convert_db_dict_to_session_permission_object(
@@ -315,6 +323,45 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
         )
         return self.convert_db_dict_to_session_permission_object(db_entry)
 
+    def update_session_details(
+        self, idea_session_id: str, actor_name: str, details: Dict
+    ) -> bool:
+        """
+        Set the desktop's display fields (name, instance type, state) on one share, only while
+        the share exists. Its expiry, profile and actor stay as stored, so a revoke or change
+        that lands meanwhile is kept. False when the share is gone.
+        """
+        details = {
+            **details,
+            session_permissions_constants.SESSION_PERMISSIONS_DB_UPDATED_ON_KEY: Utils.current_time_ms(),
+        }
+        hash_key = session_permissions_constants.SESSION_PERMISSIONS_DB_HASH_KEY
+        range_key = session_permissions_constants.SESSION_PERMISSIONS_DB_RANGE_KEY
+        try:
+            result = self._table.update_item(
+                Key={hash_key: idea_session_id, range_key: actor_name},
+                UpdateExpression='SET '
+                + ', '.join(f'#{key} = :{key}' for key in details),
+                ConditionExpression=f'attribute_exists({hash_key})',
+                ExpressionAttributeNames={f'#{key}': key for key in details},
+                ExpressionAttributeValues={
+                    f':{key}': value for key, value in details.items()
+                },
+                ReturnValues='ALL_OLD',
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                return False
+            raise
+        old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
+        self.trigger_update_event(
+            idea_session_id,
+            actor_name,
+            old_entry=old_db_entry,
+            new_entry={**old_db_entry, **details},
+        )
+        return True
+
     def delete(self, session_permission: VirtualDesktopSessionPermission):
         if Utils.is_empty(session_permission.idea_session_id) or Utils.is_empty(
             session_permission.actor_name
@@ -353,12 +400,20 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
 
         session_permissions: List[VirtualDesktopSessionPermission] = []
         try:
-            result = self._table.query(
-                KeyConditionExpression=Key(
+            query = {
+                'KeyConditionExpression': Key(
                     session_permissions_constants.SESSION_PERMISSIONS_DB_HASH_KEY
-                ).eq(idea_session_id)
-            )
-            db_entry_list = Utils.get_value_as_list('Items', result, [])
+                ).eq(idea_session_id),
+                'ConsistentRead': True,
+            }
+            db_entry_list = []
+            while True:
+                result = self._table.query(**query)
+                db_entry_list.extend(Utils.get_value_as_list('Items', result, []))
+                last_key = result.get('LastEvaluatedKey')
+                if not last_key:
+                    break
+                query['ExclusiveStartKey'] = last_key
             for db_entry in db_entry_list:
                 session_permissions.append(
                     self.convert_db_dict_to_session_permission_object(db_entry)
@@ -382,7 +437,9 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
                 Key={
                     session_permissions_constants.SESSION_PERMISSIONS_DB_HASH_KEY: idea_session_id,
                     session_permissions_constants.SESSION_PERMISSIONS_DB_RANGE_KEY: actor,
-                }
+                },
+                # a share just revoked must not still be read back
+                ConsistentRead=True,
             )
             db_entry = Utils.get_value_as_dict('Item', result)
         except self._ddb_client.exceptions.ResourceNotFoundException as _:
@@ -392,6 +449,9 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
             self._logger.exception(e)
             raise e
 
+        # no share with this actor on this desktop
+        if not db_entry:
+            return None
         return self.convert_db_dict_to_session_permission_object(db_entry)
 
     def list_all_from_db(
@@ -403,25 +463,22 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
                 'ExclusiveStartKey': Utils.from_json(Utils.base64_decode(cursor))
             }
 
+        # a page that cannot be read raises: callers act on every share, so a short read
+        # must not pass for the whole table
         permissions: List[VirtualDesktopSessionPermission] = []
         response_cursor = None
-        try:
-            result = self._table.scan(**scan_request)
-            db_entries = Utils.get_value_as_list('Items', result, [])
+        result = self._table.scan(**scan_request)
+        db_entries = Utils.get_value_as_list('Items', result, [])
 
-            for db_entry in db_entries:
-                permissions.append(
-                    self.convert_db_dict_to_session_permission_object(db_entry)
-                )
+        for db_entry in db_entries:
+            permissions.append(
+                self.convert_db_dict_to_session_permission_object(db_entry)
+            )
 
-            last_evaluated_key = Utils.get_value_as_dict('LastEvaluatedKey', result)
-            if Utils.is_not_empty(last_evaluated_key):
-                response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
-
-        except Exception as e:
-            self._logger.error(e)
-        finally:
-            return permissions, response_cursor
+        last_evaluated_key = Utils.get_value_as_dict('LastEvaluatedKey', result)
+        if Utils.is_not_empty(last_evaluated_key):
+            response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
+        return permissions, response_cursor
 
     def list_from_index(
         self, options: ListPermissionsRequest

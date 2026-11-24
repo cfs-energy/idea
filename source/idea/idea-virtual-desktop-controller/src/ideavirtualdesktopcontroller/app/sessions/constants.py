@@ -1,3 +1,5 @@
+import re
+
 from ideadatamodel import DayOfWeek
 
 USER_SESSION_DB_HASH_KEY = 'owner'
@@ -49,3 +51,10 @@ USER_SESSION_DB_FILTER_UPDATED_ON_KEY = USER_SESSION_DB_UPDATED_ON_KEY
 USER_SESSION_COUNTER_DB_HASH_KEY = 'idea_session_id'
 USER_SESSION_COUNTER_DB_RANGE_KEY = 'counter_type'
 USER_SESSION_COUNTER_DB_COUNTER_KEY = 'counter'
+
+# the desktop name is shown on the host and in the portal; keep it to plain characters
+SESSION_NAME_PATTERN = re.compile(r'[A-Za-z0-9 ._-]{1,64}')
+SESSION_NAME_RULE = (
+    'Desktop name must be 1 to 64 characters: letters, digits, spaces, dots, '
+    'underscores or hyphens.'
+)

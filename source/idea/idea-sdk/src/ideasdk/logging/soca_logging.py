@@ -20,6 +20,27 @@ import logging.handlers
 import os
 from typing import Optional
 
+# service logs are for the service and its log shipper (both root), never for the users whose
+# scripts run in the same container
+LOG_DIR_MODE = 0o750
+LOG_FILE_MODE = 0o640
+
+
+def private_log_dir(log_dir: str) -> str:
+    os.makedirs(log_dir, mode=LOG_DIR_MODE, exist_ok=True)
+    if os.stat(log_dir).st_mode & 0o777 != LOG_DIR_MODE:
+        os.chmod(log_dir, LOG_DIR_MODE)
+    return log_dir
+
+
+class PrivateTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """opens the file, and each one a rotation starts, readable by owner and group only"""
+
+    def _open(self):
+        stream = super()._open()
+        os.chmod(self.baseFilename, LOG_FILE_MODE)
+        return stream
+
 
 def get_default_logging_config(profile: str = 'default'):
     return {
@@ -198,7 +219,8 @@ class SocaLogging(SocaLoggingProtocol):
             if logfile in self._file_handlers:
                 return self._file_handlers[logfile]
             else:
-                file_handler = logging.handlers.TimedRotatingFileHandler(
+                private_log_dir(log_dir)
+                file_handler = PrivateTimedRotatingFileHandler(
                     filename=logfile,
                     encoding=constants.DEFAULT_ENCODING,
                     when=handler_config['when'],
@@ -324,14 +346,15 @@ class SocaLogging(SocaLoggingProtocol):
             log_dir = params.log_dir_name
         else:
             log_dir = os.path.join(self.get_log_dir(), params.log_dir_name)
-        if not os.path.isdir(log_dir):
-            os.makedirs(log_dir)
+        if not os.path.isabs(params.log_dir_name):
+            private_log_dir(self.get_log_dir())
+        private_log_dir(log_dir)
         logfile = os.path.join(log_dir, params.log_file_name)
 
         if logfile in self._file_handlers:
             file_handler = self._file_handlers[logfile]
         else:
-            file_handler = logging.handlers.TimedRotatingFileHandler(
+            file_handler = PrivateTimedRotatingFileHandler(
                 filename=logfile,
                 encoding=constants.DEFAULT_ENCODING,
                 when=params.when,

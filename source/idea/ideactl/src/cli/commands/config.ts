@@ -194,7 +194,13 @@ export async function configGenerate(deps: Deps, options: GenerateOptions): Prom
       driver: options.installerDriver ?? new TerminalPromptDriver(),
       identity: options.installerIdentity ?? (async (answers) => {
         const region = answers["aws_region"];
-        return installerIdentity(await deps.accountId(), typeof region === "string" ? region : undefined);
+        const profile = answers["aws_profile"];
+        // the account of the profile answered here, which quick-setup deploys with, not the
+        // ambient credentials the command started with
+        const account = deps.callerIdentity !== undefined && typeof region === "string" && region !== ""
+          ? (await deps.callerIdentity({ awsRegion: region, awsProfile: typeof profile === "string" && profile !== "" ? profile : undefined })).account
+          : await deps.accountId();
+        return installerIdentity(account, typeof region === "string" ? region : undefined);
       }),
       existingResources: options.existingResources,
       regenerate: options.regenerate,
@@ -307,6 +313,16 @@ export async function configUpdate(deps: Deps, options: UpdateOptions, source: '
       `local configuration in ${configDir} does not match the given aws region: ${options.awsRegion}`,
     );
   }
+  // a tree rendered for one account names its roles, bucket and ARNs; it is not pushed to another
+  if (deps.callerIdentity !== undefined) {
+    const localAccount = requireLocal(localConfig, `${clusterModuleId}.aws.account_id`);
+    const { account } = await deps.callerIdentity({ awsRegion: options.awsRegion, awsProfile: options.awsProfile });
+    if (String(localAccount) !== account) {
+      throw new ClusterConfigError(
+        `local configuration in ${configDir} was rendered for account ${String(localAccount)}, but these credentials are for account ${account}`,
+      );
+    }
+  }
 
   const readEntries = (): ConfigEntry[] => {
     deps.out(`reading cluster settings from ${configDir} ...`);
@@ -372,7 +388,6 @@ export function parseSetEntries(entries: readonly string[]): Array<{ key: string
     const tokens = splitN(entry, ',', 3);
     const key = afterPrefix(tokens[0], 'Key=', index, 'Key');
     const rawType = afterPrefix(tokens[1], 'Type=', index, 'Type');
-    const rawValue = afterPrefix(tokens[2], 'Value=', index, 'Value');
 
     if (key.includes(',') || key.includes(':')) {
       throw new ClusterConfigError(
@@ -381,6 +396,10 @@ export function parseSetEntries(entries: readonly string[]): Array<{ key: string
     }
 
     const { dataType, isList } = normalizeType(rawType, index);
+    // `Value=` on a string clears it, as the maintenance message needs. Blank and absent stay typos.
+    const rawValue = tokens[2] === 'Value=' && dataType === 'str' && !isList
+      ? ''
+      : afterPrefix(tokens[2], 'Value=', index, 'Value');
     if (isList) {
       const items = rawValue
         .split(',')
@@ -706,7 +725,8 @@ export function registerConfigCommands(program: Command, deps: Deps): Command {
       const valuesFile =
         options.valuesDir === undefined
           ? valuesFilePath(options.clusterName, options.awsRegion)
-          : join(mkdirSync(options.valuesDir, { recursive: true }) ?? options.valuesDir, 'values.yml');
+          // mkdirSync returns the first directory it made, not the leaf
+          : (mkdirSync(options.valuesDir, { recursive: true }), join(options.valuesDir, 'values.yml'));
       const bucket = await clusterBucketName(deps, options.clusterName, options.awsRegion);
       let body: string;
       try {

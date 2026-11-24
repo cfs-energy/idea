@@ -38,6 +38,10 @@ _Disabled by default_
 If you are planning to use an AMI which is _not using the same OS_ as the scheduler, you will need to specify `base_os` parameter
 {% endhint %}
 
+{% hint style="warning" %}
+A job can name any machine image the cluster's AWS account can launch, unless its queue restricts `instance_ami`. The job's nodes boot that image with the job's instance role and mount the cluster's shared storage, so whatever the image contains runs with both. To limit this on a queue, an administrator adds `instance_ami` to the queue profile's Restricted Parameters. See [Restricted Parameters](../admin-documentation/queue-profiles.md#restricted-parameters).
+{% endhint %}
+
 #### **instance\_profile**
 
 * Description: Reference to a custom IAM role to use. Make sure to specify the Instance Profile name and not IAM role name. Refer to the pre-requisites below before using custom IAM role.
@@ -222,6 +226,10 @@ The FSx Lustre client is not installed on every `base_os`: `rhel10`/`rocky10` ne
 
 #### **fsx\_lustre**
 
+{% hint style="info" %}
+Creating a new FSx for Lustre (`fsx_lustre=True` or an S3 bucket) works only on queues whose profile allows it. See [Jobs may create a new FSx for Lustre](../admin-documentation/queue-profiles.md#jobs-may-create-a-new-fsx-for-lustre). Mounting an existing FSx by DNS name works on every queue.
+{% endhint %}
+
 **WITH NO S3 BACKEND**
 
 * Example: `-l fsx_lustre=True`: Create a new FSx for Lustre and mount it across all nodes
@@ -254,6 +262,14 @@ The FSx Lustre client is not installed on every `base_os`: `rhel10`/`rocky10` ne
 * [Make sure to use the Filesystem's DNS name](https://awslabs.github.io/scale-out-computing-on-aws/storage/launch-job-with-fsx/#how-to-connect-to-a-permanentexisting-fsx)
 {% endhint %}
 
+{% hint style="warning" %}
+Any job can name any existing FSx for Lustre file system by its DNS name. IDEA does not check which project or queue the file system belongs to.
+
+To stop this on a queue, add `fsx_lustre` to the queue profile's **Restricted Parameters** (`queue_management_params.restricted_parameters`). See [Restricted Parameters](../admin-documentation/queue-profiles.md#restricted-parameters). This blocks every `fsx_lustre` request on that queue, including new FSx for Lustre file systems.
+
+If the queue profile sets an existing FSx for Lustre, jobs on that queue that name no file system mount it, whether or not `fsx_lustre` is restricted. See [Existing FSx for Lustre](../admin-documentation/queue-profiles.md#existing-fsx-for-lustre).
+{% endhint %}
+
 #### **fsx\_lustre\_size**
 
 * Description: Create an ephemeral FSx for your job and mount the S3 bucket specified
@@ -271,9 +287,13 @@ This parameter is ignored unless you have specified `fsx_lustre=True`
 #### **fsx\_lustre\_deployment\_type**
 
 * Description: Choose what type of FSx for Lustre you want to deploy
-* Allowed Values: `SCRATCH_1` `SCRATCH_2` `PERSISTENT_1` (case insensitive)
+* Allowed Values: `SCRATCH_1` `SCRATCH_2` `PERSISTENT_1` `PERSISTENT_2` (case insensitive)
 * Default Value: `SCRATCH_2`
 * Example: `-l fsx_lustre_deployment_type=scratch_2`: Provision a FSx for Lustre with SCRATCH\_2 type
+
+{% hint style="warning" %}
+`PERSISTENT_2` can't be combined with an S3 bucket (`fsx_lustre=<bucket>`): FSx links a `PERSISTENT_2` file system to S3 only through a data repository association, which IDEA doesn't create. Such a job is refused at submission.
+{% endhint %}
 
 {% hint style="info" %}
 If `fsx_lustre_size` is not specified, default to 1200 GB (smallest size supported)
@@ -286,12 +306,13 @@ This parameter is ignored unless you have specified `fsx_lustre=True`
 #### **fsx\_lustre\_per\_unit\_throughput**
 
 * Description: Select the baseline disk throughput available for that file system
-* Allowed Values: `50` `100` `200`
-* Unit: MB/s
-* Example: `-l fsx_lustre_per_unit_throughput=250`:
+* Allowed Values: `50` `100` `200` for `PERSISTENT_1`; `125` `250` `500` `1000` for `PERSISTENT_2`
+* Default Value: the queue profile's Per Unit Throughput, else `200` for `PERSISTENT_1` and `125` for `PERSISTENT_2`
+* Unit: MB/s/TiB
+* Example: `-l fsx_lustre_deployment_type=persistent_2 -l fsx_lustre_per_unit_throughput=250`
 
 {% hint style="info" %}
-Per Unit Throughput is only available when using `PERSISTENT_1` FSx for Lustre
+Per Unit Throughput applies only to the `PERSISTENT_1` and `PERSISTENT_2` deployment types
 {% endhint %}
 
 {% hint style="warning" %}

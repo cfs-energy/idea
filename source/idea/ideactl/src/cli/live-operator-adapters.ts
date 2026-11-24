@@ -5,6 +5,7 @@
  * reads and every SDK client use the profile selected for that action.
  */
 
+import { isLiveModuleSetRow, isOperatorSource } from "../config/upgrade-drift.ts";
 import type { ContainerHostsApi, ContainerHost } from "./commands/upgrade.ts";
 
 import { spawn } from "node:child_process";
@@ -514,12 +515,17 @@ async function deleteClusterDeps(
     },
     async listRecoveryPoints(backupVaultName) {
       const { BackupClient, ListRecoveryPointsByBackupVaultCommand } = await import("@aws-sdk/client-backup");
-      const result = await new BackupClient(await clientOptions(options)).send(
-        new ListRecoveryPointsByBackupVaultCommand({ BackupVaultName: backupVaultName }),
-      );
-      return (result.RecoveryPoints ?? []).flatMap((point) =>
-        point.RecoveryPointArn === undefined ? [] : [{ arn: point.RecoveryPointArn, status: point.Status }],
-      );
+      const client = new BackupClient(await clientOptions(options));
+      const points: Array<{ arn: string; status: string | undefined }> = [];
+      let nextToken: string | undefined;
+      do {
+        const result = await client.send(new ListRecoveryPointsByBackupVaultCommand({ BackupVaultName: backupVaultName, NextToken: nextToken }));
+        for (const point of result.RecoveryPoints ?? []) {
+          if (point.RecoveryPointArn !== undefined) points.push({ arn: point.RecoveryPointArn, status: point.Status });
+        }
+        nextToken = result.NextToken;
+      } while (nextToken !== undefined);
+      return points;
     },
     async deleteRecoveryPoint(input) {
       const { BackupClient, DeleteRecoveryPointCommand } = await import("@aws-sdk/client-backup");
@@ -615,6 +621,31 @@ async function deleteClusterDeps(
     async deleteLogGroup(name) {
       const { sdk, client } = await lazyLogs();
       await client.send(new sdk.DeleteLogGroupCommand({ logGroupName: name }));
+    },
+    async listSecrets(namePrefix) {
+      const sdk = await import("@aws-sdk/client-secrets-manager");
+      const client = new sdk.SecretsManagerClient(await clientOptions(options));
+      const secrets: Array<{ arn: string; name: string; tags: Record<string, string> }> = [];
+      let nextToken: string | undefined;
+      do {
+        const result = await client.send(new sdk.ListSecretsCommand({ Filters: [{ Key: "name", Values: [namePrefix] }], NextToken: nextToken }));
+        nextToken = result.NextToken;
+        for (const secret of result.SecretList ?? []) {
+          if (secret.ARN === undefined || secret.Name === undefined) continue;
+          secrets.push({
+            arn: secret.ARN,
+            name: secret.Name,
+            tags: Object.fromEntries((secret.Tags ?? []).map((tag) => [tag.Key ?? "", tag.Value ?? ""])),
+          });
+        }
+      } while (nextToken !== undefined && nextToken !== "");
+      return secrets;
+    },
+    async deleteSecret(arn) {
+      const sdk = await import("@aws-sdk/client-secrets-manager");
+      await new sdk.SecretsManagerClient(await clientOptions(options)).send(
+        new sdk.DeleteSecretCommand({ SecretId: arn, ForceDeleteWithoutRecovery: true }),
+      );
     },
     accountId: deps.accountId,
     async bucketExists(name) {
@@ -798,7 +829,8 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
     }),
     sharedStorage: async () => {
       throw new GeneralException(
-        "shared-storage requires the EFS and FSx client adapters, which are not ported",
+        "shared-storage add-file-system and attach-file-system are not available in ideactl. " +
+          "Write the shared-storage.<NAME>.* settings with config set; see docs/modules/storage/storage-management.md",
       );
     },
     utils: async (options) => {
@@ -864,8 +896,19 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
             awsRegion: requiredRegion(options),
             awsProfile: options.awsProfile,
           });
-          await writer.deleteConfigEntries(input.deletePrefix);
+          // In place, as the upgrade does: running services never see a missing row, and an
+          // operator's row (portal or command line) is kept whether or not the template has it.
           await writer.syncClusterSettingsInDb(input.entries, true, 'template');
+          const wanted = new Set(input.entries.map((entry) => entry.key));
+          const rows = await scanAll(deps, `${clusterName}.cluster-settings`);
+          const keys = rows.map((row) => String(row["key"]));
+          for (const row of rows) {
+            const key = String(row["key"]);
+            if (!key.startsWith(input.deletePrefix) || wanted.has(key) || isOperatorSource(row["source"]) || isLiveModuleSetRow(key, wanted)) continue;
+            // the writer deletes by prefix, so a key that prefixes another row stays
+            if (keys.some((other) => other !== key && other.startsWith(key))) continue;
+            await writer.deleteConfigEntries(key);
+          }
         },
         async exportConfig(input) {
           const [settings, modules] = await Promise.all([
@@ -956,6 +999,17 @@ export function liveContainerHosts(): ContainerHostsApi {
         instances: (group?.Instances ?? []).map((host) => ({ instanceId: host.InstanceId ?? "", id: host.LaunchTemplate?.LaunchTemplateId, version: host.LaunchTemplate?.Version })),
       };
     },
+    async launchTemplateMountLines(input) {
+      const { EC2Client, DescribeLaunchTemplateVersionsCommand } = await import("@aws-sdk/client-ec2");
+      const described = await new EC2Client(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
+        new DescribeLaunchTemplateVersionsCommand({ LaunchTemplateId: input.id, Versions: [input.version] }),
+      );
+      const encoded = described.LaunchTemplateVersions?.[0]?.LaunchTemplateData?.UserData;
+      if (encoded === undefined) return undefined;
+      // the host user data appends each share's fstab line with this guard (26.11.1 and later)
+      const script = Buffer.from(encoded, "base64").toString("utf8");
+      return [...script.matchAll(/grep -qF "([^"]+)" \/etc\/fstab/g)].map((match) => match[1]!);
+    },
     async startInstanceRefresh(input) {
       const { AutoScalingClient, StartInstanceRefreshCommand } = await import("@aws-sdk/client-auto-scaling");
       const result = await new AutoScalingClient(await awsClientOptions(input.awsRegion, input.awsProfile)).send(
@@ -992,7 +1046,7 @@ export function liveContainerHosts(): ContainerHostsApi {
         if (described.failures?.length) throw new GeneralException(`Cannot describe container instances: ${described.failures.map((failure) => `${failure.arn}: ${failure.reason}`).join(", ")}`);
         hosts.push(...(described.containerInstances ?? []).map((host) => ({
           arn: host.containerInstanceArn ?? "", instanceId: host.ec2InstanceId ?? "", status: host.status ?? "",
-          runningTasks: host.runningTasksCount ?? 0, registeredAt: host.registeredAt?.toISOString(),
+          runningTasks: host.runningTasksCount ?? 0, registeredAt: host.registeredAt?.toISOString(), agentConnected: host.agentConnected,
           attributes: Object.fromEntries((host.attributes ?? []).flatMap((attribute) => attribute.name ? [[attribute.name, attribute.value ?? ""]] : [])),
         })));
       }

@@ -39,7 +39,7 @@ from ideadatamodel.auth import (
     GlobalSignOutRequest,
     GlobalSignOutResult,
 )
-from ideadatamodel import exceptions
+from ideadatamodel import User, exceptions
 from ideasdk.utils import Utils
 
 import ideaclustermanager
@@ -60,8 +60,17 @@ class AuthAPI(BaseAPI):
     def create_api_token(self, context: ApiInvocationContext):
         self._signed_in_user_only(context)
         request = context.get_request_payload_as(CreateApiTokenRequest)
+        # a session token still inside its hour after the account's tokens were ended
+        # must not mint a token that outlives it
+        # auth_time: when the person signed in, which a token refresh does not renew
+        decoded = context.get_decoded_token() or {}
+        signed_in_at = decoded.get('auth_time', decoded.get('iat'))
+        if signed_in_at is None:
+            raise exceptions.unauthorized_access()
         context.success(
-            self.context.token_service.create_api_token(context.get_username(), request)
+            self.context.token_service.create_api_token(
+                context.get_username(), request, signed_in_at=signed_in_at
+            )
         )
 
     def list_api_tokens(self, context: ApiInvocationContext):
@@ -81,6 +90,12 @@ class AuthAPI(BaseAPI):
         )
         context.success(DeleteApiTokenResult())
 
+    @staticmethod
+    def _client_address(context: ApiInvocationContext):
+        # the sign-in page's limits count per client address, which the server records
+        # on the invocation; without one only the per-username bound applies
+        return getattr(context, 'client_address', None)
+
     def initiate_auth(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(InitiateAuthRequest)
         result = self.context.accounts.initiate_auth(request)
@@ -88,18 +103,25 @@ class AuthAPI(BaseAPI):
 
     def respond_to_auth_challenge(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(RespondToAuthChallengeRequest)
-        result = self.context.accounts.respond_to_auth_challenge(request)
+        result = self.context.accounts.respond_to_auth_challenge(
+            request, self._client_address(context)
+        )
         context.success(result)
 
     def forgot_password(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ForgotPasswordRequest)
-        self.context.accounts.forgot_password(request.username)
+        self.context.accounts.forgot_password(
+            request.username, self._client_address(context)
+        )
         context.success(ForgotPasswordResult())
 
     def confirm_forgot_password(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ConfirmForgotPasswordRequest)
         self.context.accounts.confirm_forgot_password(
-            request.username, request.password, request.confirmation_code
+            request.username,
+            request.password,
+            request.confirmation_code,
+            self._client_address(context),
         )
         context.success(ConfirmForgotPasswordResult())
 
@@ -169,8 +191,7 @@ class AuthAPI(BaseAPI):
         context.success(SignOutResult())
 
     def global_sign_out(self, context: ApiInvocationContext):
-        if not context.is_authenticated_user():
-            raise exceptions.unauthorized_access()
+        self._signed_in_user_only(context)
 
         request = context.get_request_payload_as(GlobalSignOutRequest)
         if (
@@ -192,6 +213,15 @@ class AuthAPI(BaseAPI):
         platform = request.platform
 
         user = self.context.accounts.get_user(context.get_username())
+        # a token stays valid for its hour after the account is disabled
+        if not user.enabled:
+            raise exceptions.unauthorized_access()
+        if not context.get_authorization().token_id:
+            # a session from before the account's sessions ended, or before the name
+            # was given to this account, gets none of its key
+            self.context.accounts.session_signed_in_ms(
+                context.get_username(), context.get_decoded_token()
+            )
         home_dir = UserHomeDirectory(self.context, user)
 
         key_name = home_dir.get_key_name(key_format)
@@ -201,8 +231,25 @@ class AuthAPI(BaseAPI):
             GetUserPrivateKeyResult(name=key_name, key_material=key_material)
         )
 
+    @staticmethod
+    def _member_view(user: User) -> User:
+        # what the portal's people pickers use: the name and email to show, and the
+        # admin flag and module groups that decide who may be given a desktop
+        return User(
+            username=user.username,
+            email=user.email,
+            enabled=user.enabled,
+            sudo=user.sudo,
+            additional_groups=[
+                group
+                for group in user.additional_groups or []
+                if group.endswith('-module-group')
+            ],
+        )
+
     def list_users_in_group(self, context: ApiInvocationContext):
-        if not context.is_authenticated():
+        # people only: the services list group members through Accounts.ListUsersInGroup
+        if not context.is_authenticated_user():
             raise exceptions.unauthorized_access()
         request = context.get_request_payload_as(ListUsersInGroupRequest)
         result = self.context.accounts.list_users_in_group(request)
@@ -212,7 +259,7 @@ class AuthAPI(BaseAPI):
                     'listing': [
                         user
                         if user.username == context.get_username()
-                        else user.model_copy(update={'instance_type_exceptions': None})
+                        else self._member_view(user)
                         for user in result.listing or []
                     ]
                 }

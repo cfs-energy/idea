@@ -18,7 +18,13 @@ from ideadatamodel import (
     GetProjectRequest,
     GetUserRequest,
 )
-from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
+from ideadatamodel.model_utils import ModelUtils
+from ideasdk.aws.image_builds import (
+    HOST_ROOT_GP3_IOPS,
+    HOST_ROOT_GP3_THROUGHPUT,
+    cached_image_root_gb,
+    launch_root_gb,
+)
 from ideasdk.utils import Utils
 from ideasdk.context import BootstrapContext
 from ideasdk.bootstrap import (
@@ -41,7 +47,6 @@ from troposphere.autoscaling import (
 from troposphere.autoscaling import LaunchTemplate as asg_LaunchTemplate
 from troposphere.ec2 import (
     PlacementGroup,
-    BlockDeviceMapping,
     LaunchTemplate,
     LaunchTemplateData,
     EBSBlockDevice,
@@ -58,6 +63,11 @@ import troposphere.ec2 as ec2
 import os
 import logging
 from typing import Dict, List, Optional
+import re
+
+# the compute node's tagging scripts carry the owner email inside a shell literal, so only
+# a plain address is passed on; anything else leaves the tag out
+PLAIN_EMAIL = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+')
 
 
 def compute_efa_interface_count(
@@ -179,7 +189,7 @@ class CloudFormationStackBuilder:
 
         tags = {
             constants.IDEA_TAG_NAME: self.job.get_compute_stack(),
-            constants.IDEA_TAG_JOB_ID: self.job.job_id,
+            constants.IDEA_TAG_JOB_ID: ModelUtils.aws_job_id(self.job.job_id),
             constants.IDEA_TAG_JOB_QUEUE: self.job.queue,
             constants.IDEA_TAG_QUEUE_TYPE: self.job.queue_type,
             constants.IDEA_TAG_JOB_OWNER: self.job.owner,
@@ -203,6 +213,7 @@ class CloudFormationStackBuilder:
         if self.job.name:
             tags[constants.IDEA_TAG_JOB_NAME] = self.job.name
 
+        project_tags = {}
         if self.job.project:
             tags[constants.IDEA_TAG_PROJECT] = self.job.project
 
@@ -213,12 +224,14 @@ class CloudFormationStackBuilder:
             project = get_project_result.project
             if project is not None and Utils.is_not_empty(project.tags):
                 for tag in project.tags:
-                    tags[tag.key] = tag.value
+                    project_tags[tag.key] = tag.value
 
         custom_tags = self.context.config().get_list('global-settings.custom_tags', [])
         custom_tags_dict = Utils.convert_custom_tags_to_key_value_pairs(custom_tags)
 
-        return {**custom_tags_dict, **tags}
+        # the scheduler's own tags go last: a project tag with one of their keys gave the
+        # nodes another stack, group or cluster, and clean-up acted on that (NM-01)
+        return {**custom_tags_dict, **project_tags, **tags}
 
     def build_user_data(self):
         base_os = self.job.params.base_os
@@ -241,10 +254,21 @@ class CloudFormationStackBuilder:
             get_user_result = self.context.accounts_client.get_user(
                 GetUserRequest(username=self.job.owner)
             )
-            if get_user_result and get_user_result.user and get_user_result.user.email:
-                self.job.owner_email = get_user_result.user.email
+            email = (
+                get_user_result.user.email
+                if get_user_result and get_user_result.user
+                else None
+            )
+            if email and PLAIN_EMAIL.fullmatch(email):
+                self.job.owner_email = email
                 self.logger.info(
                     f'{self.job.log_tag} found owner email: {self.job.owner_email}'
+                )
+            elif email:
+                self.job.owner_email = None
+                self.logger.warning(
+                    f'{self.job.log_tag} owner email is not a plain address; '
+                    f'the node is not tagged with it'
                 )
         except Exception as e:
             self.logger.warning(
@@ -264,8 +288,9 @@ class CloudFormationStackBuilder:
             bootstrap_package_suffix = f'{self.job.get_job_group()}-{self.job.job_uid}'
             metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.get_job_group()}'
         else:
-            bootstrap_package_suffix = f'{self.job.job_id}-{self.job.job_uid}'
-            metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}-{self.job.job_uid}'
+            aws_job_id = ModelUtils.aws_job_id(self.job.job_id)
+            bootstrap_package_suffix = f'{aws_job_id}-{self.job.job_uid}'
+            metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{aws_job_id}-{self.job.job_uid}'
 
         # Configure CloudWatch logging and metrics for compute nodes
         cloudwatch_logs_enabled = self.context.config().get_bool(
@@ -281,7 +306,7 @@ class CloudFormationStackBuilder:
             if self.job.is_shared_capacity():
                 log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.get_job_group()}'
             else:
-                log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}-{self.job.job_uid}'
+                log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{ModelUtils.aws_job_id(self.job.job_id)}-{self.job.job_uid}'
 
             log_files = [
                 CloudWatchAgentLogFileOptions(
@@ -298,6 +323,7 @@ class CloudFormationStackBuilder:
             self.logger.debug(
                 f'{self.job.log_tag} configured CloudWatch log files for Linux compute node: {len(log_files)} files, log_group: {log_group_name}'
             )
+            self.ensure_job_log_group(log_group_name)
 
         BootstrapUtils.check_and_attach_cloudwatch_logging_and_metrics(
             bootstrap_context=bootstrap_context,
@@ -412,10 +438,13 @@ class CloudFormationStackBuilder:
         spot_fleet_ltc.Overrides = []
 
         if self.job.params.enable_efa_support:
+            # an EFA job has one subnet; the fleet is given it, as the dry run is (SP-19).
+            # the EFA interfaces carry none, so without it the fleet had no cluster subnet
             for instance_type in self.job.provisioning_options.instance_types:
                 spot_fleet_ltc.Overrides.append(
                     ec2.LaunchTemplateOverrides(
                         InstanceType=instance_type.name,
+                        SubnetId=self.job.params.subnet_ids[0],
                         WeightedCapacity=instance_type.weighted_capacity,
                     )
                 )
@@ -632,6 +661,9 @@ class CloudFormationStackBuilder:
                 Ebs=EBSBlockDevice(
                     VolumeSize=root_volume_gb,
                     VolumeType=constants.DEFAULT_VOLUME_TYPE_COMPUTE,
+                    # explicit: an IDEA image's mapping carries its builder's provisioned figures
+                    Iops=HOST_ROOT_GP3_IOPS,
+                    Throughput=HOST_ROOT_GP3_THROUGHPUT,
                     DeleteOnTermination=not self.job.params.keep_ebs_volumes,
                     Encrypted=constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
                     KmsKeyId=kms_key_id,
@@ -644,7 +676,7 @@ class CloudFormationStackBuilder:
         ):
             iops = Utils.get_as_int(self.job.params.scratch_storage_iops, 0)
             launch_template_data.BlockDeviceMappings.append(
-                BlockDeviceMapping(
+                LaunchTemplateBlockDeviceMapping(
                     DeviceName='/dev/xvdbx',
                     Ebs=EBSBlockDevice(
                         VolumeSize=self.job.params.scratch_storage_size.int_val(),
@@ -674,6 +706,16 @@ class CloudFormationStackBuilder:
                 ResourceType='volume', Tags=Tags(**self.get_common_tags(), **tags)
             ),
         ]
+        # the spot fleet launches as its service-linked role, whose AWS policy may tag
+        # instances, volumes and spot requests but not interfaces: an interface entry
+        # here refuses every launch. the node's bootstrap tags its interfaces on that path.
+        if not self.job.is_spot_capacity():
+            launch_template_data.TagSpecifications.append(
+                ec2.TagSpecifications(
+                    ResourceType='network-interface',
+                    Tags=Tags(**self.get_common_tags(), **tags),
+                )
+            )
 
         # Require IMDSv2
         launch_template_data.MetadataOptions = ec2.MetadataOptions(
@@ -694,7 +736,8 @@ class CloudFormationStackBuilder:
         fsx_lustre_configuration = LustreConfiguration()
         deployment_type = self.job.params.fsx_lustre.deployment_type.upper()
         fsx_lustre_configuration.DeploymentType = deployment_type
-        if deployment_type == 'PERSISTENT_1':
+        # required with both persistent types (AWS::FSx::FileSystem LustreConfiguration)
+        if deployment_type in ('PERSISTENT_1', 'PERSISTENT_2'):
             fsx_lustre_configuration.PerUnitStorageThroughput = (
                 self.job.params.fsx_lustre.per_unit_throughput
             )
@@ -733,6 +776,30 @@ class CloudFormationStackBuilder:
 
         return self.template.to_yaml()
 
+    def ensure_job_log_group(self, log_group_name: str):
+        """
+        the scheduler creates the job's log group and sets its retention, so the compute
+        node role needs no logs:PutRetentionPolicy, which would let any job's node shorten
+        every job's log history (H04). a failure is logged and the job still provisions:
+        the node's agent can create the group, only without the retention.
+        """
+        retention_days = self.context.config().get_int(
+            'cluster.cloudwatch_logs.retention_in_days', default=90
+        )
+        try:
+            logs = self.context.aws().logs()
+            try:
+                logs.create_log_group(logGroupName=log_group_name)
+            except logs.exceptions.ResourceAlreadyExistsException:
+                pass
+            logs.put_retention_policy(
+                logGroupName=log_group_name, retentionInDays=retention_days
+            )
+        except Exception as e:
+            self.logger.warning(
+                f'{self.job.log_tag} log group {log_group_name}: retention not set: {e}'
+            )
+
     def build_cfn_stack_tags(self) -> list:
         # tags can be provided by user while provisioning always on capacity
         tags = self.job.provisioning_options.tags
@@ -749,6 +816,10 @@ class CloudFormationStackBuilder:
             constants.IDEA_TAG_NODE_TYPE: constants.NODE_TYPE_COMPUTE,
             'Name': self.job.get_compute_stack(),
         }
+        if self.job.provisioning_options.keep_forever:
+            # jobs are placed on a persistent pool at submission; this is what they are
+            # checked against (SCH-03)
+            tags[constants.IDEA_TAG_INSTANCE_PROFILE] = self.job.params.instance_profile
 
         return [{'Key': str(k), 'Value': str(v)} for k, v in tags.items() if v]
 

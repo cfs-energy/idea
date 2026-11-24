@@ -1,6 +1,8 @@
 # Begin: motd update
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
-echo -e "
+# a quoted here-document: the messages (queue, job group, project names) are data
+cat > /etc/motd <<'IDEA_MOTD'
+
      ________  _________
     /  _/ __ \/ ____/   |
     / // / / / __/ / /| |
@@ -10,6 +12,7 @@ echo -e "
 {{ message }}
 {% endfor %}
 > source /etc/environment to load IDEA paths
-" > /etc/motd
+
+IDEA_MOTD
 {% endif %}
 # End: motd update

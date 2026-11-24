@@ -8,13 +8,17 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import hashlib
 import re
 from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import List, Dict, Optional
 
-from ideadatamodel import GetUserRequest
+from botocore.exceptions import ClientError
+
+from ideadatamodel import GetProjectRequest, GetUserRequest
 import ideavirtualdesktopcontroller
+from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
 from ideadatamodel import (
     ListSessionsRequest,
     Notification,
@@ -59,15 +63,32 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
     BOOTSTRAP_REFRESH_VERSION,
     VirtualDesktopSSMCommandsUtils,
 )
+from ideasdk.aws.failure_capture import FailedHost, capture_failure
+from ideavirtualdesktopcontroller.app.sessions.session_metrics import (
+    publish_provisioning_failure,
+)
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
+    BOOTSTRAP_LOG_STREAM,
+    bootstrap_status_admin_hint,
+    BOOTSTRAP_STATUS_MESSAGES,
     VirtualDesktopControllerUtils,
     build_bootstrap_failure_message,
     build_bootstrap_log_hint,
+    dcv_host_cloudwatch_logs_enabled,
+    dcv_host_log_group,
     resolve_project_instance_profile_arn,
 )
 
 # a desktop in one of these states has no host worth moving onto another instance profile:
 # it is on its way out, or it failed and would be retried by every pass for nothing.
+# what the stopped desktop cleanup decided from: its warning write holds only while these stand
+CLEANUP_WARNING_READ_KEYS = (
+    sessions_constants.USER_SESSION_DB_STATE_KEY,
+    sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_SENT_ON_KEY,
+    sessions_constants.USER_SESSION_DB_CLEANUP_WARNING_STOP_TIME_KEY,
+    sessions_constants.USER_SESSION_DB_CLEANUP_EXEMPT_KEY,
+)
+
 INSTANCE_PROFILE_REPAIR_SKIPPED_STATES = {
     VirtualDesktopSessionState.DELETING,
     VirtualDesktopSessionState.DELETED,
@@ -111,6 +132,126 @@ STOPPED_SESSION_CLEANUP_COUNTERS = (
 # the two sweeps above may already have used most of the 30s the queue allows this message.
 STOPPED_SESSION_CLEANUP_TIME_BUDGET_MS = 5 * 1000
 
+OWNER_LEFT_PROJECT_MESSAGE = (
+    "You are no longer a member of this desktop's project, so it cannot be started or "
+    'connected to. Ask an administrator to move it to one of your projects or to add you '
+    'back to the project. You can still delete it.'
+)
+
+
+PROJECT_DISABLED_MESSAGE = (
+    "This desktop's project is disabled, so it cannot be started or connected to. Ask an "
+    'administrator to enable the project or to move the desktop to another of your '
+    'projects. You can still delete it.'
+)
+ADMIN_OWNER_LEFT_PROJECT_MESSAGE = (
+    'The owner of this desktop is no longer a member of its project. Move it to one of '
+    "the owner's projects, or add the owner back, before starting it."
+)
+ADMIN_PROJECT_DISABLED_MESSAGE = (
+    "This desktop's project is disabled. Enable the project, or move the desktop to "
+    "another of the owner's projects, before starting it."
+)
+# every reason a desktop is held for its project, to the owner and to an administrator
+PROJECT_HOLD_MESSAGES = (
+    OWNER_LEFT_PROJECT_MESSAGE,
+    PROJECT_DISABLED_MESSAGE,
+    ADMIN_OWNER_LEFT_PROJECT_MESSAGE,
+    ADMIN_PROJECT_DISABLED_MESSAGE,
+)
+# one membership read per owner serves every check within this many seconds
+OWNER_PROJECTS_CACHE_SECONDS = 30
+_OWNER_PROJECTS_CACHE: Dict[str, tuple] = {}
+_OWNER_PROJECTS_LOCK = RLock()
+
+
+def _owner_project_ids(context, owner: str) -> frozenset:
+    now = Utils.current_time_ms()
+    with _OWNER_PROJECTS_LOCK:
+        cached = _OWNER_PROJECTS_CACHE.get(owner)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+    project_ids = frozenset(
+        project.project_id
+        for project in context.projects_client.get_user_projects(username=owner)
+    )
+    with _OWNER_PROJECTS_LOCK:
+        _OWNER_PROJECTS_CACHE[owner] = (
+            now + OWNER_PROJECTS_CACHE_SECONDS * 1000,
+            project_ids,
+        )
+    return project_ids
+
+
+def owner_project_refusal(
+    context, session: VirtualDesktopSession, for_admin: bool = False
+) -> Optional[str]:
+    """
+    why the desktop is held for its project, or None: its owner is no longer a member, or
+    the project is disabled (the cluster manager's membership leaves disabled projects
+    out). a desktop stored without a project, and the cluster administrator, are not held,
+    as at create.
+    """
+    if session.project is None or Utils.is_empty(session.project.project_id):
+        return None
+    if session.owner == context.config().get_string(
+        'cluster.administrator_username', required=True
+    ):
+        return None
+    if session.project.project_id in _owner_project_ids(context, session.owner):
+        return None
+    try:
+        project = context.projects_client.get_project(
+            GetProjectRequest(project_id=session.project.project_id)
+        ).project
+    except Exception:
+        project = None
+    if project is not None and not project.is_enabled():
+        return ADMIN_PROJECT_DISABLED_MESSAGE if for_admin else PROJECT_DISABLED_MESSAGE
+    return ADMIN_OWNER_LEFT_PROJECT_MESSAGE if for_admin else OWNER_LEFT_PROJECT_MESSAGE
+
+
+def owner_in_desktop_project(context, session: VirtualDesktopSession) -> bool:
+    return owner_project_refusal(context, session) is None
+
+
+def desktop_cleanup_table_name(context) -> str:
+    """where the cluster manager records that a deletion notice was sent"""
+    return f'{context.cluster_name()}.{context.module_id()}.desktop-cleanup'
+
+
+def initialize_desktop_cleanup_table(context):
+    """the receipt table: pk 'delivered', sk the receipt, expiring at expires_at"""
+    name = desktop_cleanup_table_name(context)
+    if context.aws_util().dynamodb_check_table_exists(name, True):
+        return
+    context.aws_util().dynamodb_create_table(
+        create_table_request={
+            'TableName': name,
+            'AttributeDefinitions': [
+                {'AttributeName': 'pk', 'AttributeType': 'S'},
+                {'AttributeName': 'sk', 'AttributeType': 'S'},
+            ],
+            'KeySchema': [
+                {'AttributeName': 'pk', 'KeyType': 'HASH'},
+                {'AttributeName': 'sk', 'KeyType': 'RANGE'},
+            ],
+            'BillingMode': 'PAY_PER_REQUEST',
+        },
+        wait=True,
+        ttl=True,
+        ttl_attribute_name='expires_at',
+    )
+
+
+def cleanup_warning_receipt(idea_session_id: str, stopped_at: datetime) -> str:
+    """the notice's receipt: one per desktop and stop episode, so a later stop needs a new one"""
+    # 32 hex characters: the only receipt form the cluster manager records
+    return hashlib.sha256(
+        f'{idea_session_id}:{Utils.to_milliseconds(stopped_at)}'.encode()
+    ).hexdigest()[:32]
+
+
 CLEANUP_WARNING_NOTIFICATION_PREFIX = (
     'virtual-desktop-controller.dcv_session.notifications.cleanup_warning'
 )
@@ -126,6 +267,10 @@ STATE_TRANSITION_TIME_PATTERN = re.compile(
 STATE_TRANSITION_TIME_FORMAT = '%Y-%m-%d %H:%M:%S GMT'
 
 # no bootstrap status on the host: all that is established is that it never checked in.
+REBOOT_HOST_UNKNOWN_MESSAGE = (
+    'The state of this desktop could not be checked. Try again in a few minutes.'
+)
+REBOOT_NO_HOST_MESSAGE = "This desktop's host no longer exists, so there is nothing to reboot. Delete this desktop and create a new one."
 PROVISIONING_TIMEOUT_FAILURE_MESSAGE = 'The host for this desktop did not finish starting up within {minutes} minutes and never reported back to the cluster, so it has been released. Try again, and ask an administrator to check the host bootstrap log if it keeps happening.'
 
 
@@ -230,22 +375,46 @@ class VirtualDesktopSessionUtils:
         except exceptions.SocaException as e:
             # the plain reason built while provisioning. str() would prefix the error code.
             session.failure_reason = e.message
+            publish_provisioning_failure(
+                self.context,
+                session,
+                getattr(e, 'launch_error_code', None) or 'create_failed',
+            )
             return session
         except Exception as e:
             session.failure_reason = f'{e}'
+            publish_provisioning_failure(self.context, session, 'internal')
             return session
 
         if not session.server:
+            publish_provisioning_failure(self.context, session, 'no_host')
             session.failure_reason = (
                 'Unable to create DCV host. Contact the Administrator.'
             )
             return session
 
-        session = self._schedule_utils.update_schedule_for_session(
-            self._schedule_utils.get_default_schedules(), session
-        )
-        session.state = VirtualDesktopSessionState.PROVISIONING
-        return self._session_db.create(session)
+        try:
+            session = self._schedule_utils.update_schedule_for_session(
+                self._schedule_utils.get_default_schedules(), session
+            )
+            session.state = VirtualDesktopSessionState.PROVISIONING
+            return self._session_db.create(session)
+        except Exception as e:
+            # a launched host with no desktop row is counted and stopped by nothing
+            self._logger.exception(
+                f'desktop {session.idea_session_id} could not be recorded after its host '
+                f'{session.server.instance_id} launched; releasing the host: {e}'
+            )
+            self._server_utils.terminate_dcv_hosts([session.server], force=True)
+            try:
+                self._schedule_utils.delete_schedules_for_session(session)
+            except Exception as cleanup_error:
+                self._logger.error(
+                    f'schedules of {session.idea_session_id} left behind: {cleanup_error}'
+                )
+            publish_provisioning_failure(self.context, session, 'internal')
+            session.failure_reason = 'The desktop could not be created. Try again, or contact the Administrator.'
+            return session
 
     def repair_project_instance_profile(self, session: VirtualDesktopSession) -> bool:
         """
@@ -264,9 +433,34 @@ class VirtualDesktopSessionUtils:
         project_instance_profile_arn = resolve_project_instance_profile_arn(
             self.context, self._logger, session
         )
-        if project_instance_profile_arn is None:
-            return False
-        if session.server.instance_profile_arn == project_instance_profile_arn:
+        recorded = session.server.instance_profile_arn
+        if project_instance_profile_arn is not None:
+            keep = {project_instance_profile_arn}
+        else:
+            # not entitled now: the project's own profile stays on (a spent budget withdraws
+            # nothing from a desktop), but another project's profile, which a move before this
+            # release could leave behind, goes back to the shared one
+            if Utils.is_empty(recorded):
+                return False
+            project_instance_profile_arn = self.context.config().get_string(
+                'virtual-desktop-controller.dcv_host_instance_profile_arn'
+            )
+            keep = {project_instance_profile_arn}
+            if recorded in keep:
+                return False
+            try:
+                project = self.context.projects_client.get_project(
+                    GetProjectRequest(project_id=session.project.project_id)
+                ).project
+            except Exception as e:
+                self._logger.warning(
+                    f'could not read the project of {session.idea_session_id}: {e}'
+                )
+                return False
+            bedrock = getattr(project, 'bedrock', None)
+            if bedrock is not None and Utils.is_not_empty(bedrock.instance_profile_arn):
+                keep.add(bedrock.instance_profile_arn)
+        if recorded in keep:
             return False
 
         instance_id = session.server.instance_id
@@ -279,15 +473,17 @@ class VirtualDesktopSessionUtils:
         applied_instance_profile_arn = Utils.get_value_as_string(
             'Arn', Utils.get_value_as_dict('IamInstanceProfile', association, {})
         )
-        if applied_instance_profile_arn == project_instance_profile_arn:
-            # the desktop is already on the project profile, only the record was behind.
-            self._record_applied_instance_profile(session, project_instance_profile_arn)
+        if applied_instance_profile_arn in keep:
+            # the host is on a profile it may keep, only the record was behind.
+            self._record_applied_instance_profile(session, applied_instance_profile_arn)
             return False
 
         if not self._controller_utils.apply_instance_profile(
             instance_id=instance_id,
             instance_profile_arn=project_instance_profile_arn,
             association_id=Utils.get_value_as_string('AssociationId', association),
+            stopped=session.state == VirtualDesktopSessionState.STOPPED,
+            previous_arn=applied_instance_profile_arn,
         ):
             return False
 
@@ -512,17 +708,32 @@ class VirtualDesktopSessionUtils:
         failure_reason: str,
         bootstrap_status: Optional[str],
     ):
-        session.failure_reason = failure_reason + build_bootstrap_log_hint(
-            self.context, session.server.instance_id
+        cause = self._capture_failed_host(session, failure_reason)
+        session.failure_reason = (
+            failure_reason
+            + (f' {cause}' if cause else '')
+            + build_bootstrap_log_hint(self.context, session.server.instance_id)
         )
         session.state = VirtualDesktopSessionState.ERROR
+        if Utils.is_empty(bootstrap_status):
+            reason = 'timeout'
+        else:
+            reason = (
+                bootstrap_status
+                if bootstrap_status in BOOTSTRAP_STATUS_MESSAGES
+                else 'bootstrap_other'
+            )
+        publish_provisioning_failure(self.context, session, reason)
 
         self._logger.error(
-            f'session {session.idea_session_id} for {session.owner} failed while '
+            f'session {session.idea_session_id} failed while '
             f'provisioning on host {session.server.instance_id}, bootstrap status: '
             f'{bootstrap_status if Utils.is_not_empty(bootstrap_status) else "none"}. '
             f'{session.failure_reason}'
         )
+        hint = bootstrap_status_admin_hint(self.context, bootstrap_status)
+        if hint is not None:
+            self._logger.error(f'session {session.idea_session_id}: {hint}')
         # recorded before the host is released, so a release that fails still leaves the desktop
         # out of PROVISIONING and logged; deleting the failed desktop releases the host again.
         self._session_db.update(session)
@@ -533,6 +744,37 @@ class VirtualDesktopSessionUtils:
                 f'could not release host {session.server.instance_id} of session '
                 f'{session.idea_session_id}: {Utils.get_value_as_string("ERROR", response)}'
             )
+
+    def _capture_failed_host(
+        self, session: VirtualDesktopSession, failure_reason: str
+    ) -> Optional[str]:
+        """read while the host exists. returns a plain sentence for the desktop's owner, if any."""
+        try:
+            stack = session.software_stack
+            instance_id = session.server.instance_id
+            return capture_failure(
+                self.context,
+                self._logger,
+                FailedHost(
+                    kind='desktop',
+                    identifier=session.idea_session_id,
+                    instance_id=instance_id,
+                    failure=failure_reason,
+                    os=getattr(session.base_os, 'value', session.base_os),
+                    arch=getattr(getattr(stack, 'architecture', None), 'value', None),
+                    ami=getattr(stack, 'ami_id', None),
+                    instance_type=session.server.instance_type,
+                    release=self.context.module_version(),
+                    log_group=dcv_host_log_group(self.context)
+                    if dcv_host_cloudwatch_logs_enabled(self.context)
+                    else None,
+                    log_stream=BOOTSTRAP_LOG_STREAM.format(instance_id=instance_id),
+                    owner=session.owner,
+                ),
+            )
+        except Exception as e:
+            self._logger.warning(f'could not read the failed host: {type(e).__name__}')
+            return None
 
     def fail_bootstrap_aborted_sessions(self) -> int:
         """
@@ -676,6 +918,58 @@ class VirtualDesktopSessionUtils:
         self._logger.info(f'deleted {who}: {why}')
         return outcome
 
+    def _cleanup_warning_outcome(
+        self, session: VirtualDesktopSession, stopped_at: datetime
+    ) -> tuple:
+        """
+        what became of the deletion notice: ('sent', None), ('cannot-notify', reason) when the
+        owner cannot be emailed for a reason retrying will not change, or ('retry', None).
+        the cluster manager's receipt decides first (row: pk 'delivered', sk the receipt,
+        outcome 'sent' or 'cannot-notify', reason; a row with no outcome was sent). without
+        one, what the controller can see itself: email off for the cluster, the owner disabled
+        or without an address. anything else is a send that may yet go: warn again.
+        """
+        receipt = cleanup_warning_receipt(session.idea_session_id, stopped_at)
+        try:
+            item = (
+                self.context.aws()
+                .dynamodb_table()
+                .Table(desktop_cleanup_table_name(self.context))
+                .get_item(Key={'pk': 'delivered', 'sk': receipt}, ConsistentRead=True)
+                .get('Item')
+            )
+        except Exception as e:
+            self._logger.warning(
+                f'could not read the deletion notice receipt of {session.idea_session_id}: {e}'
+            )
+            item = None
+        if item is not None:
+            if item.get('outcome', 'sent') == 'cannot-notify':
+                return 'cannot-notify', item.get(
+                    'reason'
+                ) or 'the cluster manager could not send it'
+            return 'sent', None
+
+        config = self.context.config()
+        if not config.get_bool('cluster.ses.enabled', default=False):
+            return 'cannot-notify', 'email is off for the cluster (cluster.ses.enabled)'
+        if not config.get_bool(
+            'cluster-manager.notifications.email.enabled', default=True
+        ):
+            return 'cannot-notify', 'cluster manager email notifications are off'
+        try:
+            user = self.context.accounts_client.get_user(
+                GetUserRequest(username=session.owner)
+            ).user
+        except Exception as e:
+            self._logger.warning(f'could not read the owner {session.owner}: {e}')
+            return 'retry', None
+        if user is None or user.enabled is False:
+            return 'cannot-notify', 'the owner account is disabled'
+        if Utils.is_empty(user.email):
+            return 'cannot-notify', 'the owner has no email address'
+        return 'retry', None
+
     def _warn_owner(
         self,
         session: VirtualDesktopSession,
@@ -705,6 +999,10 @@ class VirtualDesktopSessionUtils:
                         'session_name': session.name,
                         'stopped_days': stopped_for.days,
                         'deletion_date': deletion_date,
+                        # the cluster manager records this once SES accepts the email
+                        'delivery_receipt': cleanup_warning_receipt(
+                            session.idea_session_id, stopped_at
+                        ),
                     },
                 )
             )
@@ -715,7 +1013,20 @@ class VirtualDesktopSessionUtils:
         # recorded after the send, so a send that raises is tried again on the next pass
         session.cleanup_warning_sent_on = datetime.now(timezone.utc)
         session.cleanup_warning_stop_time = stopped_at
-        self._session_db.update(session)
+        try:
+            # only the warning fields are written, and only while the desktop is still in the
+            # stop and warning state this pass read: a resume, a move or another pass wins
+            self._session_db.update(session, unless_changed=CLEANUP_WARNING_READ_KEYS)
+        except ClientError as e:
+            if (
+                e.response.get('Error', {}).get('Code')
+                != 'ConditionalCheckFailedException'
+            ):
+                raise
+            self._logger.info(
+                f'{who} changed while being warned, checked again next pass'
+            )
+            return 'raced'
         self._logger.info(f'warned {who}: {what}')
         return 'warned'
 
@@ -802,6 +1113,34 @@ class VirtualDesktopSessionUtils:
                 )
             if stopped_for < cutoff or now < warned_at + warning:
                 return 'not_due'
+            if self.context.config().get_bool(
+                f'{CLEANUP_WARNING_NOTIFICATION_PREFIX}.enabled', default=True
+            ):
+                # the full window has passed since the warning. an owner who cannot be
+                # emailed does not hold the desktop forever: it goes, as before receipts,
+                # with the reason logged. a send that may yet go is tried again, with a new
+                # window. a desktop warned before the upgrade is judged the same way.
+                outcome, reason = self._cleanup_warning_outcome(session, stopped_at)
+                if outcome == 'cannot-notify':
+                    self._logger.warning(
+                        f'session {session.idea_session_id} of {session.owner}: the deletion '
+                        f'notice could not be sent ({reason}); deleting after the window'
+                    )
+                elif outcome == 'retry':
+                    self._logger.warning(
+                        f'session {session.idea_session_id} of {session.owner}: the deletion '
+                        f'notice has no delivery record, warning again'
+                    )
+                    return self._warn_owner(
+                        session, stopped_at, stopped_for, now + warning, dry_run
+                    )
+            else:
+                # no notice is ever requested, so no receipt will come: the window from the
+                # first warning is all the owner gets, as before receipts
+                self._logger.warning(
+                    f'session {session.idea_session_id} of {session.owner}: deletion notices '
+                    f'are off ({CLEANUP_WARNING_NOTIFICATION_PREFIX}.enabled); deleting after the window'
+                )
         elif stopped_for < cutoff:
             return 'not_due'
 
@@ -816,6 +1155,29 @@ class VirtualDesktopSessionUtils:
                     f'{instance_id} is now {instance_state(instance)}, leaving it alone'
                 )
                 return 'raced'
+            # an exemption, a keep tag or a resume set since the first read keeps the desktop
+            if keep_tags & {
+                Utils.get_value_as_string('Key', tag, '')
+                for tag in Utils.get_value_as_list('Tags', instance, [])
+            }:
+                return 'kept'
+            if (
+                parse_stop_time(
+                    Utils.get_value_as_string('StateTransitionReason', instance, '')
+                )
+                != stopped_at
+            ):
+                return 'raced'
+            current = self._session_db.get_from_db(
+                idea_session_owner=session.owner,
+                idea_session_id=session.idea_session_id,
+            )
+            if current is None or current.state not in STOPPED_SESSION_CLEANUP_STATES:
+                return 'raced'
+            if current.cleanup_exempt:
+                return 'kept'
+            # deleted from the row as it is now, not as the pass first listed it
+            session = current
 
         return self._tear_down_session(
             session,
@@ -946,8 +1308,12 @@ class VirtualDesktopSessionUtils:
                 VirtualDesktopSessionState.READY,
                 VirtualDesktopSessionState.RESUMING,
             }:
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't stop. Wait for it to be READY or RESUMING."
-                self._logger.error(session.failure_reason)
+                session.failure_reason = (
+                    "This desktop isn't running, so it can't be stopped right now."
+                )
+                self._logger.error(
+                    f'cannot stop {session.idea_session_id}:{session.name} for user: {session.owner}: state is {session.state}'
+                )
                 fail_response_list.append(session)
                 continue
 
@@ -1001,7 +1367,7 @@ class VirtualDesktopSessionUtils:
         return success_response_list, fail_response_list
 
     def resume_sessions(
-        self, sessions: List[VirtualDesktopSession]
+        self, sessions: List[VirtualDesktopSession], by_admin: bool = False
     ) -> tuple[List[VirtualDesktopSession], List[VirtualDesktopSession]]:
         success_response_list: List[VirtualDesktopSession] = []
         fail_response_list: List[VirtualDesktopSession] = []
@@ -1030,10 +1396,23 @@ class VirtualDesktopSessionUtils:
                 fail_response_list.append(session)
                 continue
 
+            refusal = owner_project_refusal(self.context, session, for_admin=by_admin)
+            if refusal is not None:
+                session.failure_reason = refusal
+                self._logger.info(
+                    f'not resuming {session.idea_session_id}: {session.owner} is not in its project'
+                )
+                fail_response_list.append(session)
+                continue
+
             if session.state not in {VirtualDesktopSessionState.STOPPED}:
                 # trying to resume a session that is not stopped. Error.
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't resume a session not in STOPPED state"
-                self._logger.error(session.failure_reason)
+                session.failure_reason = (
+                    "This desktop isn't stopped, so it can't be started right now."
+                )
+                self._logger.error(
+                    f'cannot resume {session.idea_session_id}:{session.name} for user: {session.owner}: state is {session.state}'
+                )
                 fail_response_list.append(session)
                 continue
 
@@ -1102,27 +1481,63 @@ class VirtualDesktopSessionUtils:
                 VirtualDesktopSessionState.READY,
                 VirtualDesktopSessionState.ERROR,
             }:
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't reboot. Wait for it to be READY or ERROR."
-                self._logger.error(session.failure_reason)
+                session.failure_reason = (
+                    "This desktop isn't running, so it can't be rebooted right now."
+                )
+                self._logger.error(
+                    f'cannot reboot {session.idea_session_id}:{session.name} for user: {session.owner}: state is {session.state}'
+                )
                 fail_response_list.append(session)
                 continue
 
             session.force = session_orig.force
+            if Utils.is_empty(session.dcv_session_id):
+                # a host with no DCV session has no connections to count. a failed start
+                # releases its host; a host whose session creation failed is still running,
+                # and rebooting it is how its owner retries.
+                instance = (
+                    self._controller_utils.describe_instance(session.server.instance_id)
+                    if session.server and session.server.instance_id
+                    else {}
+                )
+                host_state = instance_state(instance) if instance else instance
+                if instance is None:
+                    session.failure_reason = REBOOT_HOST_UNKNOWN_MESSAGE
+                elif not instance or host_state in {'shutting-down', 'terminated'}:
+                    session.failure_reason = REBOOT_NO_HOST_MESSAGE
+                else:
+                    sessions_to_reboot.append(session)
+                    continue
+                self._logger.error(
+                    f'cannot reboot {session.idea_session_id}:{session.name} for user: {session.owner}: '
+                    f'no DCV session, host state {host_state}'
+                )
+                fail_response_list.append(session)
+                continue
+
             if Utils.is_not_empty(session.force) and session.force:
                 sessions_to_reboot.append(session)
             else:
                 sessions_to_reboot_pending_validation.append(session)
 
-        sessions_with_count = (
-            self.context.dcv_broker_client.get_active_counts_for_sessions(
-                sessions_to_reboot_pending_validation
+        try:
+            sessions_with_count = (
+                self.context.dcv_broker_client.get_active_counts_for_sessions(
+                    sessions_to_reboot_pending_validation
+                )
             )
-        )
+        except exceptions.SocaException as e:
+            for session in sessions_to_reboot_pending_validation:
+                session.failure_reason = e.message
+                fail_response_list.append(session)
+            sessions_with_count = []
 
         for session in sessions_with_count:
             if session.connection_count > 0:
-                session.failure_reason = f'There exists {session.connection_count} active connection(s) for idea_session_id: {session.idea_session_id}:{session.name}. Please terminate.'
-                self._logger.error(session.failure_reason)
+                session.failure_reason = f'{session.connection_count} connection(s) are open on this desktop.'
+                self._logger.error(
+                    f'{session.connection_count} active connection(s) on {session.idea_session_id}:{session.name}'
+                )
                 fail_response_list.append(session)
                 continue
 
@@ -1138,6 +1553,8 @@ class VirtualDesktopSessionUtils:
             response = self._server_utils.reboot_dcv_hosts([session.server])
             if 'ERROR' in response:
                 original._updated_on_ms = session._updated_on_ms
+                # compared with the row as the intent write left it, so all of it goes back
+                original._read_entry = session._read_entry
                 session = self._session_db.update(original, check_version=True)
                 session.failure_reason = Utils.get_value_as_string(
                     'ERROR', response, 'There is an error, please check with Admin.'
@@ -1254,6 +1671,44 @@ class VirtualDesktopSessionUtils:
             fail_response_list.append(session_map[session.dcv_session_id])
 
         return success_response_list, fail_response_list
+
+    def drop_index_entries_without_a_row(self) -> int:
+        """
+        A search document whose table row is gone is a desktop every admin listing still
+        shows and nothing can act on. One arrives when a session's last update reaches the
+        index after its delete (an update creates the document it does not find), or when
+        a row is removed out of band. Each document is checked against the table with a
+        consistent read, so a desktop created a moment ago is never dropped.
+        """
+        # ponytail: pages by offset, which the index refuses past 10,000 documents; the
+        # sweep then fails with a warning and drops nothing. page with search_after then
+        page_size = 100
+        indexed: List[VirtualDesktopSession] = []
+        while True:
+            listing = (
+                self._session_db.list_from_index(
+                    ListSessionsRequest(
+                        paginator=SocaPaginator(start=len(indexed), page_size=page_size)
+                    )
+                ).listing
+                or []
+            )
+            indexed.extend(listing)
+            if len(listing) < page_size:
+                break
+        dropped = 0
+        for session in indexed:
+            if Utils.is_empty(session.idea_session_id) or Utils.is_empty(session.owner):
+                continue
+            if self._session_db.get_from_db(session.owner, session.idea_session_id):
+                continue
+            self.delete_session_entry_from_opensearch(session.idea_session_id)
+            dropped += 1
+        if dropped:
+            self._logger.info(
+                f'dropped {dropped} desktop(s) from the search index: no table row'
+            )
+        return dropped
 
     def delete_session_entry_from_opensearch(self, idea_session_id: str):
         index_name = f'{self.context.config().get_string("virtual-desktop-controller.opensearch.dcv_session.alias", required=True)}-{self.context.sessions_template_version}'

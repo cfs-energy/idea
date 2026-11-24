@@ -22,6 +22,8 @@ USER_PREFIX = 'user#'
 DAY_JOB_PREFIX = 'dayjob#'
 JOB_PREFIX = 'job#'
 PROJECT_PREFIX = 'project#'
+# the usage service's per project record of what it has already settled
+SCAN_STATE_ID = 'scan#state'
 
 # parentheses are not valid in a directory service account name, so this bucket
 # can never collide with a real user.
@@ -152,6 +154,12 @@ class BedrockUsageDAO:
     def get_project_rollup(self, project_id: str, period: str) -> Optional[Dict]:
         result = self.table.get_item(
             Key={'project_id': project_id, 'usage_id': build_project_key(period)}
+        )
+        return Utils.get_value_as_dict('Item', result)
+
+    def get_scan_state(self, project_id: str) -> Optional[Dict]:
+        result = self.table.get_item(
+            Key={'project_id': project_id, 'usage_id': SCAN_STATE_ID}
         )
         return Utils.get_value_as_dict('Item', result)
 

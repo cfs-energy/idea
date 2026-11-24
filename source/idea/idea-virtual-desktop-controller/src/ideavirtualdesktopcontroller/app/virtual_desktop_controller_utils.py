@@ -9,9 +9,11 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 import os
+import shutil
 import logging
 import random
 import re
+import time
 from threading import RLock
 from typing import List, Dict, Optional
 
@@ -32,9 +34,15 @@ from ideadatamodel import (
     GetProjectRequest,
     Project,
 )
-from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
+from ideasdk.aws.image_builds import (
+    HOST_ROOT_GP3_IOPS,
+    HOST_ROOT_GP3_THROUGHPUT,
+    cached_image_root_gb,
+    launch_root_gb,
+)
 from ideasdk.bootstrap import BootstrapPackageBuilder, BootstrapUserDataBuilder
 from ideasdk.context import BootstrapContext
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils, GroupNameHelper
 from ideasdk.metrics.cloudwatch import CloudWatchAgentLogFileOptions
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
@@ -86,9 +94,33 @@ BOOTSTRAP_STATUS_MESSAGES = {
     'gpu-kernel-devel-missing': 'No kernel headers were available on the host for this desktop, so the GPU driver could not be built and the desktop never became usable. The host has been released. Ask an administrator to check the software stack image.',
     'kernel-boot-mismatch': "The desktop's operating system update did not finish: it did not start on the kernel it installed. The host has been released. Ask an administrator (reason code: kernel-boot-mismatch).",
     'lustre-module-missing': "The desktop's operating system has no FSx for Lustre driver for the kernel it runs, so shared Lustre storage could not be mounted. The host has been released. Ask an administrator (reason code: lustre-module-missing).",
+    'shared-storage-unavailable': 'The host for this desktop could not mount a shared file system the cluster requires, so the desktop never became usable. The host has been released. Ask an administrator to check that the file system exists and that the desktop subnets reach it (reason code: shared-storage-unavailable).',
     'lustre-client-install-failed': 'The FSx for Lustre client failed to install on the host for this desktop, so shared Lustre storage could not be mounted. The host has been released. Ask an administrator (reason code: lustre-client-install-failed).',
     'kernel-install-failed': "The desktop's operating system update did not finish: its kernel could not be installed. The host has been released. Ask an administrator (reason code: kernel-install-failed).",
+    'kernel-hold-failed': "The desktop's operating system update did not finish: its kernel could not be held at the installed version. The host has been released. Ask an administrator (reason code: kernel-hold-failed).",
+    'kernel-series-end-of-life': "The desktop's software stack runs a kernel series that no longer receives security fixes, so the desktop was not started. The host has been released. Ask an administrator to update the software stack (reason code: kernel-series-end-of-life).",
+    'reboot-failed': 'The host for this desktop could not restart to finish its setup, so it never became usable. The host has been released. Try again, or ask an administrator (reason code: reboot-failed).',
+    'site-hook-mismatch': "The desktop's site setup script did not match its pinned checksum, so the desktop was not started. The host has been released. Ask an administrator (reason code: site-hook-mismatch).",
+    'download-failed': 'A package the desktop needs could not be downloaded while it was being set up, so it never became usable. The host has been released. Try again, or ask an administrator (reason code: download-failed).',
+    'download-unverified': 'A package the desktop needs did not pass its integrity check while it was being set up, so it was not installed and the desktop never became usable. The host has been released. Ask an administrator (reason code: download-unverified).',
+    'efs-utils-build-failed': 'The EFS mount helper could not be built on the host for this desktop, so shared EFS storage could not be mounted. The host has been released. Ask an administrator (reason code: efs-utils-build-failed).',
+    'bootstrap-download-failed': "The desktop's setup files could not be downloaded when its host started, so it never became usable. The host has been released. Try again, or ask an administrator (reason code: bootstrap-download-failed).",
+    'aws-cli-failed': 'The AWS command line tools could not be installed on the host for this desktop, so its setup could not run. The host has been released. Try again, or ask an administrator (reason code: aws-cli-failed).',
 }
+
+# what an administrator needs for a status, in the log line only: the user message names no
+# setting. a setting is named by this cluster's module id, the key the bootstrap reads
+BOOTSTRAP_STATUS_ADMIN_HINTS = {
+    'site-hook-mismatch': 'the site hook on shared storage does not match '
+    "{module_id}.dcv_host_site_hook_sha256; set that setting to the hook's SHA-256 "
+    'after each edit of the hook',
+}
+
+
+def bootstrap_status_admin_hint(context, bootstrap_status: str) -> Optional[str]:
+    hint = BOOTSTRAP_STATUS_ADMIN_HINTS.get(bootstrap_status)
+    return hint.format(module_id=context.module_id()) if hint else None
+
 
 BOOTSTRAP_STATUS_DEFAULT_MESSAGE = 'The host for this desktop stopped its own bootstrap with status "{bootstrap_status}", so the desktop never became usable. The host has been released. Ask an administrator to check the bootstrap log for this instance.'
 
@@ -576,11 +608,80 @@ class VirtualDesktopControllerUtils:
             return {}
         return associations[0]
 
+    def put_on_instance_profile(
+        self,
+        instance_id: str,
+        instance_profile_arn: str,
+        association_id: Optional[str],
+        stopped: bool,
+        previous_arn: Optional[str] = None,
+    ):
+        """
+        put the host on the profile; raises what ec2 raises. ec2 documents the replace call for
+        a running instance and associate and disassociate for a running or stopped one, so a
+        stopped host has its profile taken off and the new one associated. when that new one
+        is refused, previous_arn, the profile taken off, is put back before raising
+        """
+        if Utils.is_not_empty(association_id) and not stopped:
+            self.ec2_client.replace_iam_instance_profile_association(
+                IamInstanceProfile={'Arn': instance_profile_arn},
+                AssociationId=association_id,
+            )
+            return
+        if Utils.is_not_empty(association_id):
+            self.ec2_client.disassociate_iam_instance_profile(
+                AssociationId=association_id
+            )
+            self._wait_for_no_instance_profile(instance_id)
+        try:
+            self.ec2_client.associate_iam_instance_profile(
+                IamInstanceProfile={'Arn': instance_profile_arn},
+                InstanceId=instance_id,
+            )
+        except Exception:
+            if Utils.is_not_empty(association_id) and Utils.is_not_empty(previous_arn):
+                try:
+                    self.ec2_client.associate_iam_instance_profile(
+                        IamInstanceProfile={'Arn': previous_arn}, InstanceId=instance_id
+                    )
+                    self._logger.warning(
+                        f'{instance_id} was put back on {previous_arn}: '
+                        f'{instance_profile_arn} was refused'
+                    )
+                except Exception as e:
+                    self._logger.error(
+                        f'{instance_id} has no instance profile: {instance_profile_arn} was '
+                        f'refused and {previous_arn} could not be put back: {e}'
+                    )
+            raise
+
+    def _wait_for_no_instance_profile(self, instance_id: str, attempts: int = 15):
+        """an association still disassociating refuses a new one"""
+        for attempt in range(attempts):
+            response = self.ec2_client.describe_iam_instance_profile_associations(
+                Filters=[
+                    {'Name': 'instance-id', 'Values': [instance_id]},
+                    {
+                        'Name': 'state',
+                        'Values': ['associating', 'associated', 'disassociating'],
+                    },
+                ]
+            )
+            if not response.get('IamInstanceProfileAssociations'):
+                return
+            time.sleep(2)
+        raise ClientError(
+            {'Error': {'Code': 'DisassociationPending', 'Message': instance_id}},
+            'DisassociateIamInstanceProfile',
+        )
+
     def apply_instance_profile(
         self,
         instance_id: str,
         instance_profile_arn: str,
         association_id: Optional[str] = None,
+        stopped: bool = False,
+        previous_arn: Optional[str] = None,
     ) -> bool:
         """
         put a running or stopped host onto the given iam instance profile. credentials a
@@ -588,16 +689,9 @@ class VirtualDesktopControllerUtils:
         access follows within the credential lifetime rather than at once.
         """
         try:
-            if Utils.is_empty(association_id):
-                self.ec2_client.associate_iam_instance_profile(
-                    IamInstanceProfile={'Arn': instance_profile_arn},
-                    InstanceId=instance_id,
-                )
-            else:
-                self.ec2_client.replace_iam_instance_profile_association(
-                    IamInstanceProfile={'Arn': instance_profile_arn},
-                    AssociationId=association_id,
-                )
+            self.put_on_instance_profile(
+                instance_id, instance_profile_arn, association_id, stopped, previous_arn
+            )
         except ClientError as e:
             self._logger.error(
                 f'could not put instance {instance_id} on instance profile '
@@ -787,23 +881,34 @@ class VirtualDesktopControllerUtils:
         if is_windows:
             component = 'virtual-desktop-host-windows'
 
-        bootstrap_package_archive_file = BootstrapPackageBuilder(
-            bootstrap_context=bootstrap_context,
-            source_directory=self.context.get_bootstrap_dir(),
-            target_package_basename=f'dcv-host-{session.idea_session_id}',
-            components=[component],
-            tmp_dir=os.path.join(
-                f'{self.context.config().get_string("shared-storage.apps.mount_dir", required=True)}',
-                self.context.cluster_name(),
-                self.context.module_id(),
-                'dcv-host-bootstrap',
-                session.owner,
-                f'{Utils.to_secure_filename(session.name)}-{session.idea_session_id}',
-            ),
-            force_build=True,
-            base_os=str(session.software_stack.base_os.value),
-            logger=self._logger,
-        ).build()
+        return self._package_and_upload(session, bootstrap_context, component)
+
+    def _package_and_upload(
+        self, session: VirtualDesktopSession, bootstrap_context, component: str
+    ) -> str:
+        package_dir = os.path.join(
+            f'{self.context.config().get_string("shared-storage.apps.mount_dir", required=True)}',
+            self.context.cluster_name(),
+            self.context.module_id(),
+            'dcv-host-bootstrap',
+            session.owner,
+            f'{Utils.to_secure_filename(session.name)}-{session.idea_session_id}',
+        )
+        try:
+            bootstrap_package_archive_file = BootstrapPackageBuilder(
+                bootstrap_context=bootstrap_context,
+                source_directory=self.context.get_bootstrap_dir(),
+                target_package_basename=f'dcv-host-{session.idea_session_id}',
+                components=[component],
+                tmp_dir=package_dir,
+                force_build=True,
+                base_os=str(session.software_stack.base_os.value),
+                logger=self._logger,
+            ).build()
+        except Exception:
+            # a render that failed part way leaves nothing behind on shared storage
+            shutil.rmtree(package_dir, ignore_errors=True)
+            raise
 
         self._logger.debug(
             f'{session.idea_session_id} built bootstrap package: {bootstrap_package_archive_file}'
@@ -840,6 +945,9 @@ class VirtualDesktopControllerUtils:
                 f'S3 bucket: {cluster_s3_bucket}, key: {upload_key}, file exists: {os.path.exists(bootstrap_package_archive_file)}'
             )
             raise
+        finally:
+            # the host downloads the package from S3; the rendered copy on shared storage is not read again
+            shutil.rmtree(package_dir, ignore_errors=True)
         return f's3://{cluster_s3_bucket}/{upload_key}'
 
     def _build_userdata(self, session: VirtualDesktopSession):
@@ -1138,6 +1246,9 @@ class VirtualDesktopControllerUtils:
                                 'VolumeType': Utils.get_as_string(
                                     constants.DEFAULT_VOLUME_TYPE_VDI, default='gp3'
                                 ),
+                                # explicit: an IDEA image's mapping carries its builder's provisioned figures
+                                'Iops': HOST_ROOT_GP3_IOPS,
+                                'Throughput': HOST_ROOT_GP3_THROUGHPUT,
                             },
                         }
                     ],
@@ -1166,6 +1277,12 @@ class VirtualDesktopControllerUtils:
                 self._logger.error(
                     f'EC2 RunInstances error: {_error_code} - {_error_message}'
                 )
+                if 'Capacity' in _error_code:
+                    HealthMetrics(self.context).add(
+                        'desktop.capacity_errors',
+                        code=_error_code,
+                        instance_family=str(session.server.instance_type).split('.')[0],
+                    )
 
                 if (
                     (
@@ -1185,7 +1302,7 @@ class VirtualDesktopControllerUtils:
 
                 # every remaining case is terminal for this request. the reason travels back to
                 # the requesting user instead of being dropped here.
-                raise exceptions.SocaException(
+                launch_failure = exceptions.SocaException(
                     error_code=errorcodes.CREATE_SESSION_FAILED,
                     message=build_launch_failure_message(
                         error_code=_error_code,
@@ -1193,6 +1310,8 @@ class VirtualDesktopControllerUtils:
                         project_instance_profile=_project_instance_profile,
                     ),
                 )
+                launch_failure.launch_error_code = f'launch_{_error_code}'
+                raise launch_failure
 
             except Exception as err:
                 self._logger.error(f'Encountered Deployment Exception: {err}')

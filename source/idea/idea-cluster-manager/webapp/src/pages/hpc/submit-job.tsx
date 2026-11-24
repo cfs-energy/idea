@@ -42,7 +42,7 @@ import {
 import {ProjectsClient, SchedulerClient} from "../../client";
 import IdeaException from '../../common/exceptions'
 import {AppContext} from "../../common";
-import Utils from "../../common/utils";
+import Utils, {encodeFileContent} from "../../common/utils";
 import {TableProps} from "@cloudscape-design/components/table";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {JobTemplate} from "../../service/job-templates-service";
@@ -51,7 +51,7 @@ import {withRouter} from "../../navigation/navigation-utils";
 import {updateJobScriptSelect} from "./pbs-select";
 import {ncpusExceedsCoresMessage} from "./hpc-utils";
 
-import nunjucks from "nunjucks"
+import {renderJobTemplate, replacePlaceholders} from "./job-template"
 
 
 export interface SubmitJobProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -113,6 +113,14 @@ const TAB_BUDGET_USAGE = 'budget-usage'
 const TAB_JOB_SCRIPT = 'job-script'
 const TAB_JOB_PARAMETERS = 'job-parameters'
 
+/** The application picker for someone with no applications: why, and the way to run a job anyway. */
+export function NoApplications({navigate}: {navigate: (path: string) => void}) {
+    return <SpaceBetween size="s">
+        <Box>No applications are available for your projects. Ask an administrator to add you to a project, or write your own job script.</Box>
+        <Button variant="primary" onClick={() => navigate('/home/script-workbench')}>Write script</Button>
+    </SpaceBetween>
+}
+
 class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     jobSubmissionForm: RefObject<IdeaForm | null>
@@ -159,9 +167,6 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
             clientSubmissionId: uuid()
         }
-        nunjucks.configure({
-            autoescape: false
-        })
     }
 
     getSchedulerClient(): SchedulerClient {
@@ -196,7 +201,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             return error.message
         }
         if (Utils.isNotEmpty(error?.errorCode)) {
-            return `Request failed with error code: ${error.errorCode}`
+            return 'The request failed. Try again; if it repeats, tell an administrator.'
         }
         return `${error}`
     }
@@ -221,7 +226,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         }
     }
 
-    loadApplication(application: HpcApplication) {
+    /** A restored project is selected only when the application still offers it; otherwise none is, and submit asks for one. */
+    loadApplication(application: HpcApplication, restoredProject?: string) {
         let projectOptions: any = []
         application.projects?.forEach(project => {
             projectOptions.push({
@@ -237,7 +243,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             selectedApplicationId: null,
             showApplicationSelectModal: false,
             projectOptions: projectOptions,
-            selectedProject: projectOptions[0]
+            selectedProject: restoredProject === undefined
+                ? projectOptions[0]
+                : projectOptions.find((option: SelectProps.Option) => option.value === restoredProject) ?? null
         })
     }
 
@@ -255,7 +263,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             // ?state= is user-editable and template_data comes from stored job templates;
             // a corrupt value must not throw inside componentDidMount and blank the page
             try {
-                state = JSON.parse(atob(stateBase64))
+                const bytes = atob(stateBase64)
+                let json = bytes
+                try {
+                    json = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(bytes, (char) => char.charCodeAt(0)))
+                } catch {
+                    // templates saved before 26.11.2 hold é as one Latin-1 byte, which is not valid UTF-8
+                }
+                state = JSON.parse(json)
             } catch (error) {
                 console.error('failed to decode job submission state', error)
                 state = null
@@ -267,7 +282,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 application_ids: [state.applicationId]
             }).then(result => {
                 if (result.applications?.length > 0) {
-                    this.loadApplication(result.applications[0])
+                    this.loadApplication(result.applications[0], Utils.isEmpty(state.project) ? undefined : state.project)
                 }
             }).catch(error => {
                 this.onError(error, 'Failed to load the application')
@@ -298,12 +313,21 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     buildUrlState = () => {
+        // the address, browser history and saved templates never carry a password field's value
+        const passwords = new Set((this.state.application?.form_template?.sections ?? [])
+            .flatMap(section => section.params ?? [])
+            .filter(param => param.param_type === 'password')
+            .map(param => param.name))
+        // the form holds what is typed; the state copy is filled only by a preview or submit
+        const source = this.getJobSubmissionFormValues() ?? this.state.jobSubmissionParameters
+        const params = source == null ? source
+            : Object.fromEntries(Object.entries(source).filter(([name]) => !passwords.has(name)))
         const state = {
             project: this.state.selectedProject?.value,
             applicationId: this.state.application?.application_id,
-            params: this.state.jobSubmissionParameters
+            params: params
         }
-        return btoa(JSON.stringify(state))
+        return encodeFileContent(JSON.stringify(state))
     }
 
     updateUrlState = (stateBase64?: string) => {
@@ -355,6 +379,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                    }
             >
                 <div style={{height: '60vh', overflow: 'auto'}}>
+                    {this.state.applications.length === 0 ? <NoApplications navigate={this.props.navigate}/> :
                     <SpaceBetween size="m" direction="vertical">
                         <TextFilter
                             filteringText={this.state.applicationFilterText}
@@ -399,7 +424,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                 }
                             })}
                         />
-                    </SpaceBetween>
+                    </SpaceBetween>}
                 </div>
             </Modal>
         )
@@ -955,15 +980,16 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             const estimated_bom_cost = this.state.submitJobResult.estimated_bom_cost
             return (
                 <ColumnLayout columns={1}>
-                    <Table items={(estimated_bom_cost.line_items) ? estimated_bom_cost.line_items! : []}
-                           columnDefinitions={getColumnDefinitions()}/>
+                    {!estimated_bom_cost.price_unavailable &&
+                        <Table items={(estimated_bom_cost.line_items) ? estimated_bom_cost.line_items! : []}
+                               columnDefinitions={getColumnDefinitions()}/>}
 
                     <ColumnLayout columns={2}>
                         <Box textAlign="left">
-                            <h3>Estimated Total Cost Per Hour</h3>
+                            <h3>Estimated total for the requested walltime (1 hour if none set)</h3>
                         </Box>
                         <Box textAlign="right">
-                            <h3>{Utils.getFormattedAmount(estimated_bom_cost?.line_items_total)}</h3>
+                            <h3>{estimated_bom_cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(estimated_bom_cost?.line_items_total)}</h3>
                         </Box>
                     </ColumnLayout>
 
@@ -1043,13 +1069,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             } else if (hasBudget()) {
                 const budget = this.state.submitJobResult?.budget_usage!
 
-                if ((budget as any).is_missing) {
-                    return <Box color="text-status-error">
-                        <StatusIndicator type="error">
-                            Budget not found: <strong>{budget.budget_name}</strong>.
-                            The configured budget no longer exists in AWS Budgets.
-                        </StatusIndicator>
-                    </Box>
+                if (this.state.submitJobResult?.estimated_bom_cost?.price_unavailable) {
+                    return <Box>Budget impact can't be calculated without a price.</Box>
                 }
 
                 return buildBudgetUsage(budget)
@@ -1132,36 +1153,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 }
                 return (
                     <ColumnLayout columns={1}>
-                        {this.isDryRun() && (
-                            <div>
-                                <Box variant="h3" color="text-status-error">Dry Run Failed</Box>
-                                <p>
-                                    <StatusIndicator type="error">Job cannot be submitted with this configuration due to below
-                                        errors.</StatusIndicator>
-                                </p>
-                            </div>
-                        )}
-                        {!this.isDryRun() && (
-                            <div>
-                                <Box variant="h3" color="text-status-error">Job Submission Failed</Box>
-                                <p>
-                                    <StatusIndicator type="error">Job submission failed with errors</StatusIndicator>
-                                </p>
-                            </div>
-                        )}
-                        <Table items={errors}
-                               columnDefinitions={[
-                                   {
-                                       id: 'error-code',
-                                       header: 'Error Code',
-                                       cell: e => e.error_code
-                                   },
-                                   {
-                                       id: 'error-code',
-                                       header: 'Description',
-                                       cell: e => <pre>{e.message}</pre>
-                                   }
-                               ]}/>
+                        <Box variant="h3" color="text-status-error">This job can't be queued:</Box>
+                        <ul>
+                            {errors.map((error, index) => <li key={index}>{error.message}</li>)}
+                        </ul>
                     </ColumnLayout>
                 )
             } else if (this.isAccepted()) {
@@ -1534,21 +1529,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             // ({{ ncpus }} / %ncpus%) is not a parsable PBS directive until the placeholders are gone.
             let jobScript = this.state.application.job_script_template!
             if (this.state.application?.job_script_type && this.state.application?.job_script_type === 'jinja2') {
-                jobScript = nunjucks.renderString(jobScript, values)
+                jobScript = renderJobTemplate(jobScript, values)
             } else {
-                jobScript = jobScript.replaceAll(`%project_name%`, values.project_name)
-                params.forEach((param) => {
-                    if (param.name && Utils.isNotEmpty(param.name)) {
-                        let value = ''
-                        if (param.name in values) {
-                            value = values[param.name]
-                            if (Utils.isEmpty(value)) {
-                                value = ''
-                            }
-                        }
-                        jobScript = jobScript.replaceAll(`%${param.name}%`, value)
-                    }
-                })
+                jobScript = replacePlaceholders(jobScript, values, params.map(param => param.name!).filter(name => Utils.isNotEmpty(name)))
             }
 
             // chunk resources authored in the template (mpiprocs, mem, place, ...) are preserved
@@ -1566,15 +1549,16 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     }))
                     return
                 }
-                this.updateUrlState()
                 this.setState({
                     jobScript: jobScript
                 }, () => {
+                    // after the values from generateJobScript are in state, so the address carries them
+                    this.updateUrlState()
                     this.getSchedulerClient().submitJob({
                         project: this.state.selectedProject?.value,
                         dry_run: dryRun,
                         job_script_interpreter: this.state.application?.job_script_interpreter,
-                        job_script: btoa(jobScript),
+                        job_script: encodeFileContent(jobScript),
                         client_submission_id: this.state.clientSubmissionId
                     }).then(result => {
                         this.setState({
@@ -1596,6 +1580,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     render() {
+        // set by the scheduler only when it kept the script; an older scheduler removes the
+        // script and returns no path, so there is nothing to open and no path to guess.
+        const scriptPath = this.state.submitJobResult?.job_script_path
         return (
             <IdeaAppLayout
                 ideaPageId={this.props.ideaPageId}
@@ -1686,25 +1673,18 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                                             </Box>
                                                             <Box textAlign="right">
                                                                 <SpaceBetween size="m" direction="vertical">
-                                                                    <div>
-                                                                        <Button
-                                                                            iconName="external"
-                                                                            variant="primary"
-                                                                            onClick={() => {
-                                                                                if (this.state.submitJobResult?.job) {
-                                                                                    const job = this.state.submitJobResult.job;
-                                                                                    const jobName = job.name || '';
-                                                                                    const jobUid = job.job_uid || '';
-                                                                                    const username = job.owner || AppContext.get().auth().getUsername() || 'clusteradmin';
-                                                                                    const filePath = `/data/home/${username}/jobs/${jobName}_${jobUid}.que`;
-                                                                                    window.location.href = `/#/home/script-workbench?file=${encodeURIComponent(filePath)}`;
-                                                                                }
-                                                                            }}
-                                                                        >
-                                                                            Open in Script Workbench
-                                                                        </Button>
-                                                                    </div>
-                                                                    {this.isDryRun() && (
+                                                                    {scriptPath && (
+                                                                        <div>
+                                                                            <Button
+                                                                                iconName="external"
+                                                                                variant="primary"
+                                                                                href={`#/home/script-workbench?file=${encodeURIComponent(scriptPath)}`}
+                                                                            >
+                                                                                Open in Script Workbench
+                                                                            </Button>
+                                                                        </div>
+                                                                    )}
+                                                                    {this.isDryRun() && scriptPath && (
                                                                         <Alert type="info">
                                                                             You can edit this script before final submission by opening it in the Script Workbench.
                                                                         </Alert>

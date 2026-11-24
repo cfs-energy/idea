@@ -227,6 +227,13 @@ systemctl() {
   [[ "$FAIL" != dcv-launcher || "$*" != 'is-active --quiet dcvsessionlauncher.service' ]]
 }
 modprobe() { [[ "$FAIL" != lustre ]]; }
+dnf() {
+  printf 'dnf %s\n' "$*" >> "$CALLS"
+  case "$FAIL" in
+    openssh) echo 'openssh-server.x86_64 9.9p1-16 baseos'; return 100 ;;
+    openssh-repo) echo 'repository unreachable'; return 1 ;;
+  esac
+}
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
 # like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
 # through the pkglibdir the dcvserver wrapper puts on LD_LIBRARY_PATH
@@ -446,7 +453,10 @@ def _mount_stubs(tmp_path, mounted):
     )
     mounted_list = tmp_path / 'mounted'
     mounted_list.write_text(''.join(f'{m}\n' for m in mounted))
-    (bin_dir / 'mountpoint').write_text(f'#!/bin/sh\ngrep -qx "$2" {mounted_list}\n')
+    # like mountpoint(1), a trailing slash does not matter
+    (bin_dir / 'mountpoint').write_text(
+        f'#!/bin/sh\nd="${{2%/}}"\ngrep -qx -e "$d" -e "$d/" {mounted_list}\n'
+    )
     for stub in ('mount', 'mountpoint'):
         (bin_dir / stub).chmod(0o755)
     fstab = tmp_path / 'fstab'
@@ -523,7 +533,7 @@ def test_every_mount_check_knows_the_clusters_mount_points(name):
     text = render(name, 'rocky9', lustre=False)
     start = text.index('IDEA_SHARED_MOUNT_DIRS=(')
     dirs = text[start : text.index(')', start)]
-    assert '/apps"' in dirs and '/data"' in dirs
+    assert "/apps'" in dirs and "/data'" in dirs
     assert text.index('IDEA_SHARED_MOUNT_DIRS=(') < text.rindex(
         'mount_shared_filesystems'
     )
@@ -533,29 +543,70 @@ def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
     script = render(
         '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
     )
-    marker = 'exit_fail "Shared storage did not mount"'
-    block = script[
-        script.index('function mount_shared_storage ()') : script.index(marker)
-        + len(marker)
-    ]
+    marker = 'fail_bootstrap shared-storage-unavailable'
+    start = script.index('function mount_shared_storage ()')
+    block = script[start : script.index('\n  fi\n', script.index(marker)) + 6]
     bin_dir, source = _mount_stubs(tmp_path, ['/data/'])  # /apps/ never mounts
-    stubs = 'mkdir() { :; }\nsleep() { :; }\n' + ''.join(
-        f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)
+    stubs = (
+        'mkdir() { :; }\nsleep() { :; }\n'
+        # the instance tag the scheduler and the desktop controller read
+        f'curl() {{ echo i-0; }}\naws() {{ echo "aws $*" >> {tmp_path}/tags; }}\n'
+        'timeout() { shift; "$@"; }\n'
+        + ''.join(f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block))
     )
     result = subprocess.run(
-        ['bash', '-c', source + '\nBAKE_STAGE=setup\n' + stubs + block],
+        [
+            'bash',
+            '-c',
+            source + f'\nBAKE_STAGE=setup\nBOOTSTRAP_DIR={tmp_path}\n' + stubs + block,
+        ],
         capture_output=True,
         text=True,
         env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
     )
-    # five attempts, then the stage stops: the bake names the function, the host exits
+    # five attempts, then the host stops with a status that says it is the storage
     assert result.returncode == 1, result.stdout + result.stderr
     assert (tmp_path / 'mounts').read_text().count('mount') == 5
     assert (tmp_path / 'bake-failed').read_text().splitlines()[0] == (
         'setup: [[ ${#not_mounted[@]} -eq 0 ]] (exit 1)'
     )
     assert result.stdout.count('Shared storage not mounted: /apps/') == 5
-    assert 'Failed: Shared storage did not mount' in result.stdout
+    assert (
+        '[ERROR] Shared storage did not mount after 5 attempts: /apps/. Check'
+        in result.stdout
+    )
+    # the directories survive the node in a tag written after the status, in a call of its
+    # own: a role that may not write the detail still records the status
+    tags = (tmp_path / 'tags').read_text().splitlines()
+    assert [t.split('--tags ')[1] for t in tags] == [
+        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable',
+        'Key=idea:BootstrapDetail,Value=/apps/',
+    ]
+
+
+def test_a_host_whose_storage_mounts_goes_on(tmp_path):
+    script = render(
+        '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
+    )
+    start = script.index('function mount_shared_storage ()')
+    block = script[
+        start : script.index(
+            '\n  fi\n', script.index('fail_bootstrap shared-storage-unavailable')
+        )
+        + 6
+    ]
+    bin_dir, source = _mount_stubs(tmp_path, ['/data/', '/apps/'])
+    stubs = 'mkdir() { :; }\nsleep() { :; }\naws() { echo tagged; }\n' + ''.join(
+        f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)
+    )
+    result = subprocess.run(
+        ['bash', '-c', source + '\n' + stubs + block + '\necho went-on\n'],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert result.returncode == 0 and 'went-on' in result.stdout
+    assert 'tagged' not in result.stdout
 
 
 def test_parent_stage_preserves_the_reported_failure(tmp_path):
@@ -627,11 +678,11 @@ submenu 'Advanced options' --id advanced-id {
     command = tmp_path / 'grub-editenv'
     command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
     command.chmod(0o755)
-    function = function.replace('/boot/grub', str(tmp_path))
     result = subprocess.run(
         [
             'bash',
             '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
             'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
             + function
             + '\nkernel_ok',
@@ -642,6 +693,7 @@ submenu 'Advanced options' --id advanced-id {
             **os.environ,
             'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
             'GRUB_SELECTION': selection,
+            'GRUB_DIR': str(tmp_path),
             'RUNNING': running,
         },
     )
@@ -658,11 +710,11 @@ def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
     command = tmp_path / 'grub-editenv'
     command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
     command.chmod(0o755)
-    function = function.replace('/boot/grub', str(tmp_path))
     result = subprocess.run(
         [
             'bash',
             '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
             'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
             + function
             + '\nkernel_ok',
@@ -673,6 +725,7 @@ def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
             **os.environ,
             'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
             'GRUB_SELECTION': saved_entry,
+            'GRUB_DIR': str(tmp_path),
             'RUNNING': running,
         },
     )
@@ -795,7 +848,7 @@ def test_templates_tolerate_the_builder_environment():
     # user data has no HOME; rustup and the efs-utils spec rely on it
     efs = render('_templates/linux/efs_mount_helper.jinja2', 'rhel9')
     assert 'export HOME="${HOME:-/root}"' in efs
-    assert efs.index('export HOME=') < efs.index('curl -sSf https://sh.rustup.rs')
+    assert efs.index('export HOME=') < efs.index('rustup-init" -o')
     # files that only RHEL ships, and a cron file AL2023 may not have, are not failures
     dcv = render('_templates/linux/dcv_server.jinja2', 'rocky9')
     for name in (
@@ -885,6 +938,266 @@ def test_scrub_machine_id_works_with_and_without_var_lib_dbus(tmp_path, has_dbus
     assert (root / 'etc/machine-id').read_text() == ''
     link = root / 'var/lib/dbus/machine-id'
     assert link.is_symlink() == has_dbus_dir
+
+
+def _stub_systemctl(tmp_path, enabled, restart_rc=0):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    calls = tmp_path / 'systemctl.log'
+    stub = bin_dir / 'systemctl'
+    stub.write_text(
+        '#!/bin/bash\n'
+        f'echo "$*" >> {calls}\n'
+        f'[[ "$1" != is-enabled ]] || exit {0 if enabled else 1}\n'
+        f'[[ "$1" != restart ]] || exit {restart_rc}\n'
+    )
+    stub.chmod(0o755)
+    return {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}, calls
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('enabled,restart_rc', [(True, 0), (True, 1), (False, 0)])
+def test_scrub_restarts_kdump_after_its_last_fstab_write(
+    tmp_path, builder, enabled, restart_rc
+):
+    """
+    kdump rebuilds its initrd on any boot that finds /etc/fstab newer than it. The scrub's
+    sed -i rewrote fstab after kdump had built, so every clone rebuilt on its first boot.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    restart = scrub.index('systemctl restart kdump.service')
+    last_fstab_write = max(
+        i
+        for i, line in enumerate(scrub.splitlines())
+        # sed -i, or a filtered copy written back over fstab
+        if '/etc/fstab' in line
+        and (line.startswith('sed -i') or '> /etc/fstab' in line)
+    )
+    assert scrub.count('\n', 0, restart) > last_fstab_write
+    start = scrub.rindex('\nif ', 0, restart)
+    block = scrub[start : scrub.index('\nfi\n', restart) + 4]
+    env, calls = _stub_systemctl(tmp_path, enabled, restart_rc)
+    # a kdump that will not start costs each clone a rebuild, not the bake
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert ('restart kdump.service' in calls.read_text()) == enabled
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('rebuilt_by_restart', [True, False])
+def test_scrub_rebuilds_a_kdump_initrd_the_restart_left_older_than_fstab(
+    tmp_path, builder, rebuilt_by_restart
+):
+    """
+    EL9 compute clones still rebuilt: the restart returned 0 with the crash kernel still
+    loaded ("already running"), so the initrd stayed older than fstab and nothing said so.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    restart = scrub.index('systemctl restart kdump.service')
+    start = scrub.rindex('\nif ', 0, restart)
+    block = scrub[start : scrub.index('\nfi\n', restart) + 4]
+    root = tmp_path / 'root'
+    (root / 'boot').mkdir(parents=True)
+    (root / 'etc').mkdir()
+    initrd = root / 'boot/initramfs-5.14.0-687.66.1.el9_8.x86_64kdump.img'
+    initrd.write_text('built at boot')
+    fstab = root / 'etc/fstab'
+    fstab.write_text('UUID=1 / xfs defaults 0 0\n')
+    os.utime(initrd, (1000, 1000))
+    os.utime(fstab, (2000, 2000))
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    stub = tmp_path / 'bin/systemctl'
+    if rebuilt_by_restart:
+        stub.write_text(
+            stub.read_text().replace(
+                '#!/bin/bash\n',
+                f'#!/bin/bash\n[[ "$1" != restart ]] || touch -d @3000 {initrd}\n',
+            )
+        )
+    for name, body in (
+        ('uname', 'echo 5.14.0-687.66.1.el9_8.x86_64'),
+        ('journalctl', 'echo "kdumpctl[1]: kdump: Kdump already running: [WARNING]"'),
+        ('kdumpctl', f'echo "$*" >> {tmp_path}/kdumpctl.log; touch -d @3000 {initrd}'),
+    ):
+        tool = tmp_path / 'bin' / name
+        tool.write_text(f'#!/bin/bash\n{body}\n')
+        tool.chmod(0o755)
+    block = block.replace('/boot/', f'{root}/boot/').replace(
+        '/etc/fstab', f'{root}/etc/fstab'
+    )
+    result = subprocess.run(
+        ['bash', '-ec', block], check=True, env=env, capture_output=True, text=True
+    )
+    rebuilds = tmp_path / 'kdumpctl.log'
+    assert rebuilds.exists() != rebuilt_by_restart
+    if not rebuilt_by_restart:
+        assert rebuilds.read_text() == 'rebuild\n'
+    assert initrd.stat().st_mtime >= fstab.stat().st_mtime
+    # the builder log names what kdump said and both times: the journal is deleted next
+    assert 'kdump: kdumpctl[1]: kdump: Kdump already running' in result.stdout
+    assert str(initrd) in result.stdout and str(fstab) in result.stdout
+    assert ('older than' in result.stdout) != rebuilt_by_restart
+
+
+def test_scrub_is_traced_in_the_builder_log(tmp_path):
+    scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    lines = scrub.splitlines()
+    # after the environment is read, before the first command that changes the host
+    assert lines.index('set -x') < next(
+        i for i, line in enumerate(lines) if line.startswith('systemctl ')
+    )
+
+
+def test_compute_cleanup_keeps_the_private_tmp_of_running_services(tmp_path):
+    """
+    kdump.service on EL9 has PrivateTmp: with its directory deleted the service cannot be
+    stopped, and the scrub's restart rebuilt nothing.
+    """
+    post = render(
+        'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+        'rocky9',
+    )
+    root = tmp_path / 'root'
+    kept, removed = [], []
+    for base in ('tmp', 'var/tmp'):
+        private = root / base / 'systemd-private-0819df-kdump.service-AbCdEf/tmp'
+        private.mkdir(parents=True)
+        kept.append(private)
+        hidden = root / base / '.font-unix'
+        hidden.mkdir()
+        kept.append(hidden)
+        for name in ('cloud-init', 'pbs_boot_check'):
+            (root / base / name).mkdir()
+            (root / base / name / 'file').write_text('x')
+            removed.append(root / base / name)
+    (root / 'var/crash').mkdir(parents=True)
+    roots = {
+        '/tmp': str(root / 'tmp'),
+        '/var/tmp': str(root / 'var/tmp'),
+        '/var/crash': str(root / 'var/crash'),
+    }
+    subprocess.run(['bash', '-ec', bake_cleanup_segment(post, roots)], check=True)
+    assert all(path.is_dir() for path in kept)
+    assert not any(path.exists() for path in removed)
+    # still after kdump has been started, so nothing is deleted under a build in progress
+    assert post.index('systemctl start kdump.service') < post.index(
+        'for cleanup_root in /var/tmp /tmp'
+    )
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['rocky9', 'ubuntu2404'])
+def test_scrub_leaves_no_builder_lines_for_a_clones_log_stream(
+    tmp_path, builder, base_os
+):
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    start = re.search(r'^systemctl stop (syslog\.socket|rsyslog)', scrub, re.M).start()
+    block = scrub[start : scrub.index('/bin/sync')]
+    root = tmp_path / 'root'
+    journal = root / 'var/log/journal'
+    (journal / 'builder-machine-id').mkdir(parents=True)
+    (journal / 'builder-machine-id/system.journal').write_text('builder')
+    (root / 'var/lib/rsyslog').mkdir(parents=True)
+    (root / 'var/lib/rsyslog/imjournal.state').write_text('cursor')
+    for name in ('messages', 'messages-20261109', 'syslog', 'syslog.1', 'secure'):
+        (root / 'var/log' / name).write_text('builder')
+    block = block.replace('/var/', f'{root}/var/')
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    # ubuntu's rsyslog is socket activated: left listening, syslog.socket starts it again on
+    # the next line and it writes a new /var/log/syslog after the scrub has removed it
+    stub = tmp_path / 'bin/systemctl'
+    stub.write_text(
+        stub.read_text()
+        + f'[[ "$*" != "stop rsyslog" ]] || grep -qx "stop syslog.socket" {calls}'
+        f' || touch {tmp_path}/reactivated\n'
+    )
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert 'stop rsyslog' in calls.read_text().splitlines()
+    assert not (tmp_path / 'reactivated').exists()
+    assert sorted(p.name for p in (root / 'var/log').iterdir()) == ['journal', 'secure']
+    # the directory stays: journald keeps the clone's journal persistent only if it exists
+    assert list(journal.iterdir()) == []
+    assert not (root / 'var/lib/rsyslog/imjournal.state').exists()
+    # the cloudwatch agent is stopped before rsyslog, so it ships nothing more from the builder
+    assert scrub.index('systemctl stop amazon-cloudwatch-agent') < start
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'rocky9', 'ubuntu2404'])
+def test_a_clone_does_not_boot_the_builders_cloudwatch_agent(
+    tmp_path, builder, base_os
+):
+    """
+    the image kept the agent enabled, so a clone started it at boot with the builder's
+    settings and its bootstrap stopped it 34 s later: 90 s lost to a stop that hung (AL2023).
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    lines = [
+        x for x in scrub.splitlines() if 'amazon-cloudwatch-agent' in x and x[0] != '#'
+    ]
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    assert calls.read_text().splitlines()[:2] == [
+        'stop amazon-cloudwatch-agent',
+        'disable amazon-cloudwatch-agent',
+    ]
+    # a host without the agent installed must not fail its scrub
+    stub = tmp_path / 'bin/systemctl'
+    stub.write_text('#!/bin/bash\nexit 5\n')
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    # what turns it back on: the host's bootstrap starts it through the agent's own tool,
+    # whose start enables the unit
+    host = Path(
+        IDEA_BOOTSTRAP_DIR, '_templates/linux/cloudwatch_agent.jinja2'
+    ).read_text()
+    assert 'amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s ' in host
+    for name in (
+        'virtual-desktop-host-linux/setup.sh.jinja2',
+        'compute-node/compute_node.sh.jinja2',
+    ):
+        assert (
+            "include '_templates/linux/cloudwatch_agent.jinja2'"
+            in Path(IDEA_BOOTSTRAP_DIR, name).read_text()
+        )
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'rocky9', 'ubuntu2404'])
+def test_an_al2023_clone_does_not_log_under_its_builders_name(
+    tmp_path, builder, base_os
+):
+    """
+    every line of an AL2023 compute clone's system log carried its builder's host name, and
+    a desktop's until its first reboot: rsyslog keeps the name it read at its start, and the
+    image started it at boot, before cloud-init had named the clone.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    lines = [
+        x
+        for x in scrub.splitlines()
+        if re.match(r'systemctl \w+ (rsyslog|syslog\.socket)\b', x)
+    ]
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    expected = ['stop syslog.socket', 'stop rsyslog']
+    # only where IDEA adds rsyslog itself; elsewhere it is the system's and starts after
+    # the host has its name
+    if base_os == 'amazonlinux2023':
+        expected.append('disable rsyslog')
+    assert calls.read_text().splitlines() == expected
+    # a host without the unit must not fail its scrub
+    (tmp_path / 'bin/systemctl').write_text('#!/bin/bash\nexit 5\n')
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    # what turns it back on, on the same hosts: every clone's bootstrap, image or not
+    host = render('_templates/linux/rsyslog.jinja2', base_os)
+    assert ('systemctl enable rsyslog --now' in host) == (base_os == 'amazonlinux2023')
+    for name in (
+        'virtual-desktop-host-linux/setup.sh.jinja2',
+        'compute-node/setup.sh.jinja2',
+    ):
+        setup = Path(IDEA_BOOTSTRAP_DIR, name).read_text()
+        start = setup.index("include '_templates/linux/rsyslog.jinja2'")
+        # not inside a branch a baked host skips
+        assert 'baked-release' not in setup[setup.rindex('\nfi\n', 0, start) : start]
 
 
 def test_a_failed_scrub_names_the_command(tmp_path):
@@ -1158,8 +1471,8 @@ def test_windows_join_renames_first_so_the_preset_account_matches():
     ).read_text()
     assert '-NewName $($authorizationEntry.hostname) "' not in join
     rename = join.index('Rename-Computer -NewName $($authorizationEntry.hostname)')
-    assert rename < join.index('Invoke-Expression $joinCmd')
-    assert '$optionsString += ", JoinWithNewName"' in join
+    assert rename < join.index('$joinResult = Add-Computer @joinArgs')
+    assert "$joinOptions += ', JoinWithNewName'" in join
     # a failed join retries on a short bounded poll, not a fixed 30 s sleep
     assert 'Get-Random -Minimum $AD_JOIN_MIN_SLEEP' not in join
     assert '((Get-Date) -lt $joinDeadline)' in join
@@ -1265,6 +1578,10 @@ def test_windows_user_data_that_runs_again_after_the_final_restart_is_a_no_op(ba
     assert written < body.rindex('Restart-Computer -Force')
 
 
+# the Windows drive paths are checked by executing Mount-SharedStorage in
+# test_windows_bootstrap_settings.py (one separator, per-user share, refusals)
+
+
 @pytest.mark.parametrize('base_os', WINDOWS)
 def test_windows_repeat_run_marker_waits_for_a_successful_domain_join(
     tmp_path, monkeypatch, base_os
@@ -1294,10 +1611,11 @@ def test_windows_repeat_run_marker_waits_for_a_successful_domain_join(
     scripts = shell.render(tmp_path, base_os, 'm7i.large', component, variables)
     configure = next(f for f in scripts if f.endswith('Configure.ps1'))
     text = Path(configure).read_text()
+    # a desktop not in the domain exits before the ready event and the marker (executed in
+    # test_windows_bootstrap_panel.py for the join itself)
     write = text.index('[IO.File]::WriteAllText($ConfiguredMarker')
-    guard = text.rindex('if ($Joined) {', 0, write)
-    joined = text[text.rindex('$Joined =', 0, guard) : guard]
-    assert 'PartOfDomain' in joined and '$global:IdeaDomainJoined' in joined
+    guard = text.index('if (-not ($ServerInAD -or $global:IdeaDomainJoined)) {')
+    assert guard < text.index('Write-ToLog -Message "IDEA_BOOTSTRAP_COMPLETE') < write
     assert '$global:IdeaDomainJoined = $joined' in text
 
 
@@ -1320,17 +1638,31 @@ def _hook_variables(name):
 def test_optional_userdata_hooks_are_guarded():
     for name in USERDATA_HOOKS:
         text = render(name, 'rocky9', variables=_hook_variables(name))
-        assert 'no userdata customizations' in text, name
+        # the shared check logs the absent case ("no userdata customizations")
+        assert 'prepare_site_hook ' in text, name
         assert ('|| exit' in _hook_block(text)) == ('ami-builder/' in name), name
 
 
 def _hook_block(text):
-    start = text.index('userdata_customizations.sh')
-    start = text.rindex('if [[ -f', 0, start)
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    functions = ''
+    for name in ('prepare_site_hook', 'finish_site_hook'):
+        at = common.index(f'function {name} () {{')
+        functions += common[at : common.index('\n}\n', at) + 3]
+    if 'if prepare_site_hook ' not in text:
+        # the desktop checks before DCV starts and runs the checked copy at the end
+        check_at = text.index('SITE_HOOK_RUN=""\nprepare_site_hook')
+        hook_at = text.index('if [[ -n "${SITE_HOOK_RUN}" ]]; then', check_at)
+        return (
+            functions
+            + text[check_at : text.index('|| true\n', check_at) + 8]
+            + text[hook_at : text.index('\nfi\n', hook_at) + 4]
+        )
+    start = text.index('if prepare_site_hook ')
     # The block's own closing fi, not the first 'fi' inside a word such as sshd_config.
     indent = start - text.rindex('\n', 0, start) - 1
     end = text.index('\n' + ' ' * indent + 'fi', start) + 1
-    return text[start : text.index('\n', end)]
+    return functions + text[start : text.index('\n', end)]
 
 
 @pytest.mark.parametrize('case', ['absent', 'fail', 'pass'])
@@ -1516,3 +1848,192 @@ def test_host_firewall_is_masked_before_it_is_installed(base_os, unit):
     script = render('_templates/linux/disable_firewall.jinja2', base_os=base_os)
     assert f'systemctl mask {unit}' in script
     assert 'LoadState' not in script
+
+
+def bake_cleanup_segment(text, roots, other_mounts=()):
+    """The compute bake's temp cleanup, with its roots moved into the sandbox."""
+    start = text.index('  function bake_cleanup_root () {')
+    end = (
+        text.index(
+            '\n  fi\n', text.index('if bake_cleanup_root /var/crash; then', start)
+        )
+        + 6
+    )
+    segment = text[start:end]
+    segment = segment.replace(
+        'for cleanup_root in /var/tmp /tmp; do',
+        f"for cleanup_root in '{roots['/var/tmp']}' '{roots['/tmp']}'; do",
+    )
+    segment = segment.replace(
+        'bake_cleanup_root /var/crash', f"bake_cleanup_root '{roots['/var/crash']}'"
+    )
+    segment = segment.replace('/var/crash/*', f"'{roots['/var/crash']}'/*")
+    assert (
+        '/var/tmp' not in segment.replace(roots['/var/tmp'], '')
+        and ' /tmp' not in segment
+    )
+    # macOS rm has no --one-file-system; hosts run GNU rm
+    if (
+        subprocess.run(
+            ['rm', '--one-file-system', '-rf', '/nonexistent-idea'], capture_output=True
+        ).returncode
+        != 0
+    ):
+        segment = segment.replace('rm -rf --one-file-system', 'rm -rf')
+    mounted = ' '.join(f"'{m}'" for m in other_mounts)
+    stubs = f"""
+log_warning() {{ echo "warning $*"; }}
+findmnt() {{
+  local target="${{@: -1}}" m
+  for m in {mounted}; do [[ "$target" == "$m" ]] && {{ [[ "$*" == *FSTYPE* ]] && echo nfs4 || echo "$m"; return 0; }}; done
+  [[ "$*" == *FSTYPE* ]] && echo xfs || echo /
+}}
+"""
+    return stubs + segment
+
+
+def test_bake_cleanup_skips_a_root_that_is_another_mount(tmp_path):
+    post = render(
+        'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+        'rocky9',
+    )
+    roots = {
+        name: str(tmp_path / name.strip('/').replace('/', '-'))
+        for name in ('/tmp', '/var/tmp', '/var/crash')
+    }
+    for path in roots.values():
+        Path(path).mkdir()
+        (Path(path) / 'entry').write_text('x')
+    # a share configured at /var/tmp: its contents are not the bake's to delete
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            bake_cleanup_segment(post, roots, other_mounts=[roots['/var/tmp']]),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (Path(roots['/var/tmp']) / 'entry').exists()
+    assert (
+        not (Path(roots['/tmp']) / 'entry').exists()
+        and not (Path(roots['/var/crash']) / 'entry').exists()
+    )
+    assert f'not cleaning {roots["/var/tmp"]}' in result.stdout
+
+
+def _continuation_shares(tmp_path, mounted):
+    """the compute node continuation's share check as rendered, with /apps/ in scope and
+    /opt-share/ scoped to another queue profile; returns the run result and the tags written"""
+    from test_bootstrap_shell_syntax import job
+
+    config = Config()
+    config.put(
+        'shared-storage',
+        {
+            'apps': {
+                'provider': 'efs',
+                'mount_dir': '/apps/',
+                'scope': ['cluster'],
+                'efs': {'dns': 'fs-1.efs.example.invalid'},
+            },
+            'other': {
+                'provider': 'efs',
+                'mount_dir': '/opt-share/',
+                'scope': ['scheduler:queue-profile'],
+                'queue_profiles': ['gpu'],
+                'efs': {'dns': 'fs-2.efs.example.invalid'},
+            },
+        },
+    )
+    text = render(
+        'compute-node/compute_node_post_reboot.sh.jinja2',
+        'rocky9',
+        lustre=False,
+        config=config,
+        variables={'job': job(), 'queue_profile': 'normal'},
+    )
+    start = text.index('IDEA_SHARED_MOUNT_DIRS=(')
+    end = text.index('\n', text.index('fail_bootstrap shared-storage-unavailable'))
+    bin_dir, source = _mount_stubs(tmp_path, mounted)
+    stubs = (
+        'sleep() { :; }\n'
+        f'curl() {{ echo i-0; }}\naws() {{ echo "aws $*" >> {tmp_path}/tags; }}\n'
+        'timeout() { shift; "$@"; }\n'
+    )
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            source.replace('/var/lib/idea', str(tmp_path))
+            + f'\nBOOTSTRAP_DIR={tmp_path}\n'
+            + stubs
+            + text[start:end]
+            + '\necho scheduler-start\n',
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    tags = tmp_path / 'tags'
+    return text, result, tags.read_text() if tags.exists() else ''
+
+
+def test_a_compute_node_whose_share_did_not_come_back_does_not_start_the_scheduler(
+    tmp_path,
+):
+    text, result, tags = _continuation_shares(tmp_path, ['/data/'])  # /apps/ lost
+    # checked before the scheduler daemon is started, with the first pass's five attempts
+    assert text.index('fail_bootstrap shared-storage-unavailable') < text.index(
+        '# Begin: Scheduler Start'
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'scheduler-start' not in result.stdout
+    assert (tmp_path / 'mounts').read_text().count('mount') == 5
+    assert (
+        'Shared storage did not mount after the bootstrap reboot (5 attempts): /apps/'
+        in result.stdout
+    )
+    assert 'Key=idea:BootstrapStatus,Value=shared-storage-unavailable' in tags
+    assert 'Key=idea:BootstrapDetail,Value=/apps/' in tags
+
+
+def test_an_optional_share_that_did_not_come_back_does_not_stop_the_node(tmp_path):
+    # /opt-share/ belongs to another queue profile: this node never needed it
+    _, result, tags = _continuation_shares(tmp_path, ['/apps/', '/data/'])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'scheduler-start' in result.stdout and tags == ''
+
+
+@pytest.mark.parametrize(
+    'detail, tagged',
+    [
+        ('/apps/ /data/', '/apps/ /data/'),
+        ('/a,b/ /c/', '/a b/ /c/'),
+        ('/' + 'd' * 300, '/' + 'd' * 251 + ' ...'),
+    ],
+)
+def test_the_stop_detail_fits_a_tag(tmp_path, detail, tagged):
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    stubs = (
+        f'curl() {{ echo i-0; }}\naws() {{ printf "%s\\n" "$@" >> {tmp_path}/tags; }}\n'
+        'timeout() { shift; "$@"; }\n'
+    )
+    subprocess.run(
+        [
+            'bash',
+            '-c',
+            common.replace('/var/lib/idea', str(tmp_path))
+            + f'\nBOOTSTRAP_DIR={tmp_path}\n'
+            + stubs
+            + f"BOOTSTRAP_DETAIL='{detail}' fail_bootstrap shared-storage-unavailable reason\n",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    lines = (tmp_path / 'tags').read_text().splitlines()
+    value = next(x for x in lines if x.startswith('Key=idea:BootstrapDetail,Value='))
+    assert value == f'Key=idea:BootstrapDetail,Value={tagged}'
+    assert len(value) - len('Key=idea:BootstrapDetail,Value=') <= 256
+    assert 'Key=idea:BootstrapStatus,Value=shared-storage-unavailable' in lines

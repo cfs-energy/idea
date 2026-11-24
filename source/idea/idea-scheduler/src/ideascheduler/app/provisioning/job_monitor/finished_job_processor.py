@@ -18,6 +18,7 @@ from ideadatamodel import (
     CustomFileLoggerParams,
     SocaJobState,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideadatamodel.reporting.efficiency import latest_run_id
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 from ideasdk.utils import Utils
@@ -26,6 +27,7 @@ from typing import Dict, List, Optional
 from threading import Thread, Event
 import arrow
 import logging
+import time
 
 from ideascheduler.app.metrics.job_completion_metrics import (
     JobCompletionMetrics,
@@ -35,6 +37,22 @@ from ideascheduler.app.provisioning.lifecycle_events import (
     ProvisioningLifecycleEvents,
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
+
+
+def record_scratch_outcome(context, logger, job: SocaJob):
+    """a job's scratch folder must never get in the way of finishing the job"""
+    scratch_cleanup = getattr(context, 'scratch_cleanup', None)
+    if scratch_cleanup is None:
+        return
+    try:
+        scratch_cleanup.record_job_finished(job)
+    except Exception as e:
+        logger.error(f'{job.log_tag} scratch record failed: {e}')
+
+
+def _subjob_index(job_id: Optional[str]) -> int:
+    index = str(job_id or '').rpartition('[')[2].rstrip(']')
+    return int(index) if index.isdigit() else 0
 
 
 class ProcessFinishedJob:
@@ -275,6 +293,9 @@ class ProcessFinishedJob:
             )
             return False
 
+    def record_scratch_outcome(self):
+        record_scratch_outcome(self._context, self._logger, self.job)
+
     def log_job_complete(self):
         log_msg = f'{self.job.log_tag} JobCompleted'
         if self._logger.isEnabledFor(logging.DEBUG):
@@ -284,13 +305,62 @@ class ProcessFinishedJob:
     def apply_disposition(self):
         self.job.disposition = ProvisioningLifecycleEvents.get_disposition(self.job)
         if self.job.disposition == 'deleted':
-            if not self.job.reason_class and not self.job.status_reason:
+            if not self.job.reason_class:
+                # nothing recorded why, so qdel did it. a status_reason here is only the
+                # waiting signals' 'Job held' for an owner's hold or a dependency, not a
+                # reason. a recorded wait (capacity, a queue limit) stays the reason class.
                 self.job.reason_class = 'cancelled'
-                self.job.status_reason = 'Cancelled by the owner.'
+                self.job.status_reason = 'Cancelled.'
+                deleted_by = self._deleted_by()
+                if deleted_by == self.job.owner:
+                    self.job.status_reason = 'Cancelled by the owner.'
+                elif deleted_by:
+                    # only a PBS manager or operator can delete someone else's job
+                    self.job.reason_class = 'administrator'
+                    self.job.status_reason = f'Deleted by {deleted_by}.'
         elif self.job.disposition == 'held':
             self.job.reason_class = self.job.reason_class or 'retries_exhausted'
+        elif self.job.terminated and not self.job.status_reason:
+            self._apply_deleted_while_running()
         self.job.reason_class = self.job.reason_class or 'unknown'
         self.job.status_reason = self.job.status_reason or self.job.error_message
+
+    def _apply_deleted_while_running(self):
+        """
+        qdel ended a job that had started. It is still whatever it exited with, and its
+        owner reads who stopped it beside that, as for a job deleted while queued. For an
+        array it is the first subjob qdel ended that is named: the array itself ran on.
+        """
+        job = self.job
+        deleted_by = self._deleted_by()
+        if deleted_by:
+            mine = deleted_by == job.owner
+            job.reason_class = job.reason_class or (
+                'cancelled' if mine else 'administrator'
+            )
+            job.status_reason = (
+                'Cancelled by the owner.' if mine else f'Deleted by {deleted_by}.'
+            )
+            return
+        for subjob in job.subjobs or []:
+            if subjob.terminated is not True:
+                continue
+            deleted_by = self._deleted_by(subjob.job_id)
+            if deleted_by == job.owner:
+                job.status_reason = f'Subjob {subjob.job_id} cancelled by the owner.'
+            elif deleted_by:
+                job.status_reason = f'Subjob {subjob.job_id} deleted by {deleted_by}.'
+            return
+
+    def _deleted_by(self, job_id: Optional[str] = None) -> Optional[str]:
+        """who PBS says deleted the job. Not knowing is an answer: the record says less."""
+        try:
+            return self._context.scheduler.get_job_deleted_by(job_id or self.job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{self.job.log_tag} could not read who deleted the job: {e}'
+            )
+            return None
 
     def invoke_unprovisioned(self) -> Optional[SocaJob]:
         """
@@ -353,6 +423,8 @@ class ProcessFinishedJob:
             if not self.publish_to_finished_jobs_db():
                 return None
 
+            self.record_scratch_outcome()
+
             self.log_job_complete()
 
             self.publish_job_metrics()
@@ -375,6 +447,15 @@ class FinishedJobProcessor:
     """
     prepares finished jobs for post processing
     """
+
+    # a pass stops asking the index after a lookup fails or once its lookups took this
+    # long in all: the default wait between passes
+    INDEX_LOOKUP_BUDGET_SECS = 30.0
+    # a record the index refused is left out of this many passes, so a few it keeps
+    # refusing at the head of the oldest-first page cannot hold every later one (SJ-28)
+    INDEX_REJECTED_SKIP_PASSES = 20
+    INDEX_PAGE = 500
+    _index_lookup_secs_left = INDEX_LOOKUP_BUDGET_SECS
 
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
@@ -401,34 +482,161 @@ class FinishedJobProcessor:
             )
         )
 
+    def _recorded_job(self, job_uid: Optional[str]) -> Optional[SocaJob]:
+        """
+        the finished record for a job, or None if it still has to be processed.
+
+        a task restored from a copy holds jobs in the jobs table that finished after the
+        copy was taken. the document store knows those, and re-learning the record here
+        keeps a restore from repeating the completion email and metrics, while its scratch
+        folder still goes on the record. a failed lookup repeats them, which is better than
+        losing the record.
+
+        it runs once for every finished job, so an index that is down is asked once a
+        pass, and a slow one until the pass has spent INDEX_LOOKUP_BUDGET_SECS on it: the
+        rest of the pass is recorded as after a failed lookup.
+        """
+        stored = self._context.job_cache.get_completed_job_by_uid(job_uid)
+        if stored is not None or Utils.is_empty(job_uid):
+            return stored
+        if self._index_lookup_secs_left <= 0:
+            return None
+        started = time.monotonic()
+        try:
+            indexed = self._context.document_store.get_job(job_uid=job_uid)
+        except Exception as e:
+            self._index_lookup_secs_left = 0.0
+            self._logger.warning(
+                f'(JobUid: {job_uid}) index lookup failed, '
+                f'not asked again this pass: {e}'
+            )
+            return None
+        self._index_lookup_secs_left -= time.monotonic() - started
+        if self._index_lookup_secs_left <= 0:
+            self._logger.warning('index lookups slow, not asked again this pass')
+        if indexed is not None:
+            self._context.job_cache.add_finished_job(indexed)
+            self._context.job_cache.mark_job_indexed(indexed)
+            self._record_scratch_outcome(indexed)
+        return indexed
+
+    def _uid_holds_another_job(self, job: SocaJob, stored: Optional[SocaJob]) -> bool:
+        """
+        whether the record under this job's job_uid is another job's and must be kept. Only
+        a subjob row an earlier build filed there, under the same owner, is replaced by its
+        array's record; job_uid can be set by a submitter, and a reused one must not erase
+        another job's history and cost.
+        """
+        if stored is None or Utils.is_empty(job.job_uid) or stored.job_id == job.job_id:
+            return False
+        if (
+            ModelUtils.array_parent_id(stored.job_id) == job.job_id
+            and stored.owner == job.owner
+        ):
+            return False
+        self._logger.error(
+            f'{job.log_tag} job_uid {job.job_uid} already holds the record of job '
+            f'{stored.job_id}; that record is kept and this job is not recorded'
+        )
+        return True
+
+    def _record_scratch_outcome(self, job: SocaJob):
+        record_scratch_outcome(self._context, self._logger, job)
+
+    def _apply_subjob_outcomes(self, job: SocaJob, from_history: bool):
+        """
+        an array's record carries how each subjob ended, and its own status is theirs taken
+        together: 0 only when every submitted index finished with 0, otherwise the first
+        failure's. PBS keeps the last subjob's status on the array, so a later success hides
+        an earlier failure, and that value is never kept. With no history to read, or one
+        that cannot be read, the status is unknown, which nothing takes as success. An
+        array with a subjob qdel ended is itself recorded as ended by qdel, as a plain job
+        that qdel ended is whatever it exited with.
+        """
+        job.exit_status = None
+        job.subjobs = None
+        if not from_history:
+            return
+        try:
+            submitted, subjobs = self._context.scheduler.get_array_subjobs(job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} subjob history could not be read; the array is recorded '
+                f'with no status of its own: {e}'
+            )
+            return
+        subjobs = sorted(subjobs, key=lambda subjob: _subjob_index(subjob.job_id))
+        if not subjobs:
+            return
+        job.subjobs = subjobs
+        if any(subjob.terminated is True for subjob in subjobs):
+            # qdel ended a subjob. It can still exit 0, and the array's own history only
+            # says so when the whole array was deleted.
+            job.terminated = True
+        failed = [
+            subjob.exit_status
+            for subjob in subjobs
+            if subjob.exit_status is not None and subjob.exit_status != 0
+        ]
+        if failed:
+            job.exit_status = failed[0]
+        elif submitted == len(subjobs) and all(
+            # a done subjob reads X while its array is active and F in history
+            subjob.state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+            and subjob.exit_status == 0
+            for subjob in subjobs
+        ):
+            job.exit_status = 0
+
     def _process_finished_jobs(self, jobs: List[SocaJob]):
+        """
+        record the jobs PBS no longer lists as active, and return the ids of those the job
+        cache can now drop. An id is returned only for a job whose record is on file.
+        """
         if len(jobs) == 0:
             return []
+        self._index_lookup_secs_left = self.INDEX_LOOKUP_BUDGET_SECS
 
-        finished_job_ids = []
-        cached_jobs: Dict[str, SocaJob] = {}
-        for job in jobs:
-            finished_job_ids.append(job.job_id)
-            cached_jobs[job.job_id] = job
-
-        finished_jobs = self._context.scheduler.list_jobs(
-            job_ids=finished_job_ids, job_state=SocaJobState.FINISHED
-        )
+        # qstat -x answers for live jobs as well as finished ones
+        try:
+            history = {
+                job.job_id: job
+                for job in self._context.scheduler.list_jobs(
+                    job_ids=[job.job_id for job in jobs],
+                    job_state=SocaJobState.FINISHED,
+                )
+            }
+        except Exception as e:
+            # one job that cannot be read must not hold up the rest: each is asked
+            # about on its own below, and only the one that fails waits
+            self._logger.warning(
+                f'finished jobs could not be read together, reading one by one: {e}'
+            )
+            history = {}
 
         metrics_batch = JobCompletionBatch(self._context)
-        recorded_jobs = []
-        returned_ids = {job.job_id for job in finished_jobs}
-        finished_jobs.extend(job for job in jobs if job.job_id not in returned_ids)
-        for finished_job in finished_jobs:
+        recorded_ids = []
+        for cached in jobs:
+            finished_job = cached
             try:
-                # Preserve the reason alongside the scheduler's execution timestamps.
-                cached = cached_jobs[finished_job.job_id]
-                stored = self._context.job_cache.get_completed_job_by_uid(
-                    cached.job_uid
-                )
-                if stored is not None:
-                    recorded_jobs.append(stored)
+                if not self._may_record(cached, history):
                     continue
+                if not self._delete_unused_stack(cached, history.get(cached.job_id)):
+                    continue
+                from_history = cached.job_id in history
+                finished_job = history.get(cached.job_id, cached)
+                # a record under this job_uid from another id is not this job's. An earlier
+                # build could file an array's subjob there, and the array's own record
+                # replaces that. Any other job's record is kept: job_uid can be chosen by a
+                # submitter, and a reused one must not erase that job's history and cost.
+                stored = self._recorded_job(cached.job_uid)
+                if stored is not None and stored.job_id == cached.job_id:
+                    recorded_ids.append(cached.job_id)
+                    continue
+                if self._uid_holds_another_job(cached, stored):
+                    recorded_ids.append(cached.job_id)
+                    continue
+                # Preserve the reason alongside the scheduler's execution timestamps.
                 if not finished_job.execution_hosts:
                     finished_job.execution_hosts = cached.execution_hosts
                 for field in (
@@ -439,16 +647,28 @@ class FinishedJobProcessor:
                 ):
                     if getattr(cached, field) is not None:
                         setattr(finished_job, field, getattr(cached, field))
+                # PBS history is read against the queue profile as it is now. What the
+                # job was provisioned with is on its cached row.
+                if cached.is_provisioned() and cached.params and finished_job.params:
+                    for field in ('instance_ami', 'instance_types'):
+                        if getattr(cached.params, field):
+                            setattr(
+                                finished_job.params,
+                                field,
+                                getattr(cached.params, field),
+                            )
+                if ModelUtils.is_array_job_id(finished_job.job_id):
+                    self._apply_subjob_outcomes(finished_job, from_history)
                 recorded_job = ProcessFinishedJob(
                     context=self._context,
                     logger=self._logger,
                     job=finished_job,
                     job_export_logger=self._jobs_export_logger,
                     metrics_context=metrics_batch,
-                    cached_fallback=finished_job.job_id not in returned_ids,
+                    cached_fallback=not from_history,
                 ).invoke()
                 if recorded_job is not None:
-                    recorded_jobs.append(recorded_job)
+                    recorded_ids.append(cached.job_id)
             except Exception as e:
                 self._logger.exception(
                     f'{finished_job.log_tag} failed to process finished job: {e}'
@@ -458,7 +678,123 @@ class FinishedJobProcessor:
             metrics_batch.flush()
         except Exception as error:
             self._logger.exception(f'failed to publish completion metrics: {error}')
-        return [job.job_id for job in recorded_jobs]
+        return recorded_ids
+
+    def _may_record(self, cached: SocaJob, history: Dict[str, SocaJob]) -> bool:
+        """
+        whether PBS has shown this job to be over. One the listing returned is judged by
+        its state there. One it left out is asked about on its own before it is taken as
+        gone, because the listing can drop a job PBS still has: one id PBS no longer knows
+        can cost a page its other jobs. Only PBS answering that it does not know this id,
+        or that it is finished, lets the job be recorded; what is read here is added to
+        history. No answer raises, which leaves the job tracked for the next cycle.
+        """
+        if cached.job_id not in history:
+            state = self._context.scheduler.get_job_history_state(cached.job_id)
+            if state is None:
+                return True
+            for job in self._context.scheduler.list_jobs(
+                job_ids=[cached.job_id], job_state=SocaJobState.FINISHED
+            ):
+                history[job.job_id] = job
+            if cached.job_id not in history:
+                # PBS has it and its entry cannot be read here, as for a queue whose
+                # profile is gone. Finished is still PBS's word that it is over.
+                if state != SocaJobState.FINISHED:
+                    self._logger.info(
+                        f'{cached.log_tag} not finished in PBS (state: {state}); '
+                        f'left in the job cache'
+                    )
+                return state == SocaJobState.FINISHED
+        if history[cached.job_id].state == SocaJobState.FINISHED:
+            return True
+        # PBS still has it in another state. Being absent from one listing is not proof
+        # that a job is over, so it stays tracked and is asked about again next cycle.
+        self._logger.info(
+            f'{cached.log_tag} not finished in PBS '
+            f'(state: {history[cached.job_id].state}); left in the job cache'
+        )
+        return False
+
+    def _delete_unused_stack(self, cached: SocaJob, history: Optional[SocaJob]) -> bool:
+        """
+        delete the stack of a job that ended before it started when no instance came up on
+        it. Nothing else would: the housekeeper deletes stacks through their instances and
+        the provisioning sweep only through jobs still queued. A stack shared with other
+        jobs is left, as that sweep leaves it, and one with an instance is the housekeeper's.
+        False while the instance cache cannot say: the job stays tracked for the next cycle.
+        """
+        if (
+            not cached.is_provisioned()
+            or cached.is_shared_capacity()
+            or not ProcessFinishedJob.never_started(cached)
+            or (history is not None and not ProcessFinishedJob.never_started(history))
+        ):
+            return True
+        instance_cache = self._context.instance_cache
+        if not instance_cache.is_ready():
+            self._logger.info(
+                f'{cached.log_tag} instance cache not ready; left in the job cache'
+            )
+            return False
+        stack_name = cached.get_compute_stack()
+        # the cached job is rebuilt from the queue's current settings, so a queue changed
+        # from shared to single-job reads as single-job while its jobs still share the
+        # stack; and a shared stack's instances carry the id of the job that made it. the
+        # stack's own tags and what is on it now decide (NM-02 / SCH-38)
+        if any(
+            instance.soca_compute_stack == stack_name
+            for instance in instance_cache.list_compute_instances(
+                states=['pending', 'running']
+            )
+        ):
+            return True
+        try:
+            stack = self._context.aws_util().cloudformation_describe_stack(
+                stack_name=stack_name
+            )
+        except Exception as e:
+            self._logger.warning(
+                f'{cached.log_tag} stack {stack_name} not read, left for the next pass: {e}'
+            )
+            return False
+        if stack is not None and self._stack_is_shared(stack):
+            return True
+        if self._other_jobs_bound_to(cached, stack_name):
+            return True
+        self._logger.info(
+            f'{cached.log_tag} never started; deleting stack {stack_name}'
+        )
+        try:
+            self._context.aws_util().cloudformation_delete_stack(stack_name=stack_name)
+        except Exception as e:
+            # the job stays tracked so the delete is asked again next pass: once it is
+            # recorded nothing else revisits a stack with no instance (SCH-38)
+            self._logger.error(
+                f'{cached.log_tag} failed to delete stack {stack_name}, retried next '
+                f'pass: {e}'
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _stack_is_shared(stack) -> bool:
+        keep_forever = getattr(stack, 'soca_keep_forever', False)
+        idle = getattr(stack, 'soca_terminate_when_idle', 0)
+        return keep_forever is True or (isinstance(idle, int) and idle > 0)
+
+    def _other_jobs_bound_to(self, cached: SocaJob, stack_name: str) -> bool:
+        jobs_table = self._context.job_cache.get_jobs_table()
+        for entry in jobs_table.find(provisioned=True):
+            job = self._context.job_cache.convert_db_entry_to_job(entry)
+            if (
+                job is not None
+                and job.job_id != cached.job_id
+                and job.is_provisioned()
+                and job.get_compute_stack() == stack_name
+            ):
+                return True
+        return False
 
     def _process_unprovisioned_jobs(self, jobs: List[SocaJob]):
         """
@@ -466,13 +802,31 @@ class FinishedJobProcessor:
         cannot be re-read from the scheduler, and they are never priced.
         """
         metrics_batch = JobCompletionBatch(self._context)
-        recorded_jobs = []
+        recorded_ids = []
+        self._index_lookup_secs_left = self.INDEX_LOOKUP_BUDGET_SECS
         for job in jobs:
             try:
-                stored = self._context.job_cache.get_completed_job_by_uid(job.job_uid)
-                if stored is not None:
-                    recorded_jobs.append(stored)
+                # the same proof as for a job that ran: PBS says it is finished, or that
+                # it does not know it. No answer raises and the job stays tracked.
+                state = self._context.scheduler.get_job_history_state(job.job_id)
+                if state not in (None, SocaJobState.FINISHED):
+                    self._logger.info(
+                        f'{job.log_tag} not finished in PBS (state: {state}); '
+                        f'left in the job cache'
+                    )
                     continue
+                stored = self._recorded_job(job.job_uid)
+                if stored is not None and stored.job_id == job.job_id:
+                    recorded_ids.append(job.job_id)
+                    continue
+                if self._uid_holds_another_job(job, stored):
+                    recorded_ids.append(job.job_id)
+                    continue
+                if ModelUtils.is_array_job_id(job.job_id):
+                    # an array can lose its capacity after subjobs ran
+                    self._apply_subjob_outcomes(
+                        job, from_history=job.start_time is not None
+                    )
                 recorded_job = ProcessFinishedJob(
                     context=self._context,
                     logger=self._logger,
@@ -481,7 +835,7 @@ class FinishedJobProcessor:
                     metrics_context=metrics_batch,
                 ).invoke_unprovisioned()
                 if recorded_job is not None:
-                    recorded_jobs.append(recorded_job)
+                    recorded_ids.append(job.job_id)
             except Exception as e:
                 self._logger.exception(
                     f'{job.log_tag} failed to record unprovisioned job: {e}'
@@ -491,12 +845,51 @@ class FinishedJobProcessor:
             metrics_batch.flush()
         except Exception as error:
             self._logger.exception(f'failed to publish completion metrics: {error}')
-        return [job.job_id for job in recorded_jobs]
+        return recorded_ids
+
+    def _adopt_arrays_of(self, subjob_rows: List[str], active_job_ids) -> List[str]:
+        """
+        make sure the array behind each leftover subjob row is tracked before the row goes,
+        so an array still in PBS is finished under its own id. Returns the rows to drop; one
+        whose array could not be read stays for the next cycle.
+        """
+        droppable = []
+        for job_id in subjob_rows:
+            parent_id = ModelUtils.array_parent_id(job_id)
+            try:
+                if (
+                    parent_id in active_job_ids
+                    and self._context.job_cache.get_job(parent_id) is None
+                ):
+                    self._context.job_cache.sync(
+                        self._context.scheduler.list_jobs(job_ids=[parent_id])
+                    )
+                self._context.job_cache.delete_job_execution_hosts(job_id)
+                self._logger.info(
+                    f'(JobId: {job_id}) subjob row dropped; its array {parent_id} is the job'
+                )
+                droppable.append(job_id)
+            except Exception as e:
+                self._logger.warning(
+                    f'(JobId: {job_id}) could not adopt array {parent_id}: {e}'
+                )
+        return droppable
 
     def _index_pending_jobs(self):
         if not self._context.document_store.is_enabled():
             return
-        jobs = self._context.job_cache.list_pending_index_jobs()
+        rejected = self.__dict__.setdefault('_index_rejected', {})
+        for key in list(rejected):
+            rejected[key] -= 1
+            if rejected[key] <= 0:
+                del rejected[key]
+        jobs = [
+            job
+            for job in self._context.job_cache.list_pending_index_jobs(
+                limit=self.INDEX_PAGE + len(rejected)
+            )
+            if (job.job_uid or job.job_id) not in rejected
+        ][: self.INDEX_PAGE]
         if not jobs:
             return
 
@@ -529,6 +922,7 @@ class FinishedJobProcessor:
                 failures = 0
                 continue
             self._logger.warning(f'{job.log_tag} job index write pending')
+            rejected[job.job_uid or job.job_id] = self.INDEX_REJECTED_SKIP_PASSES
             failures += 1
             if failures >= 3:
                 self._logger.warning(
@@ -541,7 +935,9 @@ class FinishedJobProcessor:
             try:
                 self._logger.debug('FinishedJobProcessor: Starting processing cycle')
 
-                jobs_table = self._context.job_cache.get_jobs_table()
+                # read before PBS is asked: a job cached after the listing below was taken
+                # is missing from it without being over.
+                result = list(self._context.job_cache.get_jobs_table().all())
 
                 try:
                     # raise_on_error: a failed qselect must not read as "no active jobs" -
@@ -562,8 +958,8 @@ class FinishedJobProcessor:
 
                 finished_jobs = []
                 unprovisioned_jobs = []
+                subjob_rows = []
 
-                result = jobs_table.all()
                 for entry in result:
                     if self._exit.is_set():
                         break
@@ -573,6 +969,14 @@ class FinishedJobProcessor:
 
                         # if job is active, do nothing..
                         if job_id in active_job_ids:
+                            continue
+
+                        if ModelUtils.array_parent_id(job_id) is not None:
+                            # PBS lists an array and never its subjobs, so a subjob is
+                            # absent while it runs. It is not a job of its own: the array's
+                            # row and record cover it. A row for one is left over from an
+                            # earlier build and is dropped with no record.
+                            subjob_rows.append(job_id)
                             continue
 
                         # fetch_errors: the delete below drops the provisioning error row,
@@ -612,7 +1016,7 @@ class FinishedJobProcessor:
                         f'unprovisioned jobs recorded: {jobs_recorded}'
                     )
 
-                recorded_ids = []
+                recorded_ids = self._adopt_arrays_of(subjob_rows, active_job_ids)
                 if unprovisioned_jobs:
                     recorded_ids.extend(
                         self._process_unprovisioned_jobs(unprovisioned_jobs)

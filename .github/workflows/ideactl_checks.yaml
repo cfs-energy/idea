@@ -35,18 +35,20 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-inputs.sh
       - name: Set up pinned tools
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.7
           install_args: node python java actionlint shellcheck
       - name: Setup DynamoDB Local
         uses: ./.github/actions/setup_dynamodb_local
       - name: Install the test oracles
         # flatten.py and the Jinja2 rendering oracle are Python; the settings-sync tests run
-        # against DynamoDB Local at the path the suite looks for.
+        # against DynamoDB Local at the path the suite looks for. Their pins and hashes come
+        # from the runtime lock, so the oracles move with it.
         run: |
-          python3 -m pip install 'jinja2==3.1.6' 'PyYAML==6.0.3'
+          awk '/^[a-z0-9]/ { keep = $0 ~ /^(jinja2|markupsafe|pyyaml)==/ } keep' ../../../requirements/runtime.txt > "$RUNNER_TEMP/oracles.txt"
+          python3 -m pip install --require-hashes -r "$RUNNER_TEMP/oracles.txt"
       - name: Check package version
         run: |
           PACKAGE_VERSION=$(node --input-type=module -e 'import packageJson from "./package.json" with { type: "json" }; process.stdout.write(packageJson.version)')
@@ -95,8 +97,83 @@ jobs:
             --volume "$SMOKE_ROOT/config:/tmp/config" "$IMAGE" \
             config generate --values-file /tmp/values.yml --config-dir /tmp/config --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
+  bastion-sshd:
+    # the bastion's own OpenSSH (9.9 on AL2023) under the health check with every startup slot
+    # taken; the runner's Ubuntu 9.6 answers a refusal differently and skips that part. On the
+    # image's python3.13, which runs these scripts in the task: AL2023's python3 is 3.9
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188
+    steps:
+      - name: Install the bastion image's OpenSSH
+        # as the control-plane Dockerfile does: the newest OpenSSH past the base release
+        run: |
+          dnf install -y openssh-server openssh-clients python3.13 procps-ng tar gzip git shadow-utils findutils util-linux
+          dnf upgrade -y --releasever=latest 'openssh*'
+          /usr/sbin/sshd -V
+          python3.13 --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run the bastion shell tests as root
+        working-directory: source/idea/idea-test-utils/tests
+        run: |
+          set -o pipefail
+          python3.13 test_bastion_shell.py -v 2>&1 | tee "$RUNNER_TEMP/root.log"
+          # OK alone, no skips: a skip here would leave the refusal path unproven on this sshd
+          grep -qx OK "$RUNNER_TEMP/root.log"
+      - name: Run the bastion shell tests unprivileged
+        working-directory: source/idea/idea-test-utils/tests
+        run: |
+          set -o pipefail
+          useradd --create-home bastion-test
+          chown -R bastion-test "$GITHUB_WORKSPACE"
+          runuser -u bastion-test -- python3.13 test_bastion_shell.py -v 2>&1 | tee "$RUNNER_TEMP/user.log"
+          grep -qx OK "$RUNNER_TEMP/user.log"
+  private-parity-build:
+    # Installs and builds the tree private parity tests, in a job that cannot request an OIDC
+    # token: dependency code runs here, never beside the capture credential.
+    if: >-
+      github.repository == 'cfs-energy/idea' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.IDEACTL_PRIVATE_PARITY == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up pinned tools
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5
+        with:
+          # renovate: datasource=github-releases depName=jdx/mise
+          version: 2026.11.7
+          install_args: node python java actionlint shellcheck
+      - name: Install and build
+        run: |
+          npm ci --strict-allow-scripts
+          npm run build
+          # The test oracles as hashed wheels into the tree, so the parity job installs nothing.
+          awk '/^[a-z0-9]/ { keep = $0 ~ /^(jinja2|markupsafe|pyyaml)==/ } keep' ../../../requirements/runtime.txt > "$RUNNER_TEMP/oracles.txt"
+          python3 -m pip install --require-hashes --only-binary=:all: --target .parity-oracles -r "$RUNNER_TEMP/oracles.txt"
+          # Only the build's outputs go on: the parity job takes everything it runs outside the
+          # test namespace (scripts, actions, tool list) from its own checkout of this commit.
+          tar -czf "$RUNNER_TEMP/parity-build.tar.gz" -C "$GITHUB_WORKSPACE" \
+            source/idea/ideactl/node_modules source/idea/ideactl/dist source/idea/ideactl/.parity-oracles
+      - name: Hand the build outputs to the parity job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: private-parity-tree
+          path: ${{ runner.temp }}/parity-build.tar.gz
+          if-no-files-found: error
+          retention-days: 1
   private-parity:
-    # Only reviewed main code may read private captures. Never run this on PR code.
+    # Only reviewed main code may read private captures. Never run this on PR code. It runs no
+    # install or build: the tree comes built from private-parity-build, and its code runs only
+    # inside the parity script's network namespace.
+    needs: private-parity-build
     if: >-
       github.repository == 'cfs-energy/idea' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.IDEACTL_PRIVATE_PARITY == '1'
     runs-on: ubuntu-24.04
@@ -109,19 +186,25 @@ jobs:
         working-directory: source/idea/ideactl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download the build outputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: private-parity-tree
+          path: ${{ runner.temp }}
+      - name: Unpack the build outputs
+        working-directory: ${{ github.workspace }}
+        run: bash source/idea/ideactl/scripts/unpack-parity-build.sh "$RUNNER_TEMP/parity-build.tar.gz" "$GITHUB_WORKSPACE"
       - name: Set up pinned tools
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
-          install_args: node python java actionlint shellcheck
+          version: 2026.11.7
+          install_args: node python java
       - name: Setup DynamoDB Local
         uses: ./.github/actions/setup_dynamodb_local
-      - name: Install and build before fetching private data
-        run: |
-          npm ci --strict-allow-scripts
-          npm run build
-          python3 -m pip install 'jinja2==3.1.6' 'PyYAML==6.0.3'
       - name: Authenticate for the single private capture object
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:

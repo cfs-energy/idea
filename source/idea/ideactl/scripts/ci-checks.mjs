@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, extname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = resolve(SCRIPT_DIRECTORY, "..");
@@ -760,11 +760,8 @@ export async function runCli(argv) {
   }
 }
 
-const entry = process.argv[1];
-if (
-  entry !== undefined &&
-  pathToFileURL(resolve(entry)).href === import.meta.url
-) {
+// true however the path was spelled: spaces, symlinks, relative
+if (import.meta.main) {
   try {
     await runCli(process.argv.slice(2));
   } catch (error) {

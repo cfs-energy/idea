@@ -55,7 +55,7 @@ class IdeaAuthConfirmForgotPassword extends Component<IdeaAuthProps, IdeaAuthSta
                     }
                 }).catch(error => {
                     if(error.errorCode === NETWORK_ERROR || error.errorCode === REQUEST_TIMEOUT) {
-                        this.getForm().setError(error.errorCode, `Failed to communicate with backend service: ${error.message}`)
+                        this.getForm().setError(error.errorCode, error.message)
                     } else {
                         this.getForm().setError(error.errorCode, error.message)
                     }

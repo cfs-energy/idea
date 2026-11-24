@@ -121,7 +121,9 @@ class PricingHelper:
 
     @property
     def is_fsx_lustre_enabled(self):
-        return self.job.params.fsx_lustre.enabled
+        # only a file system the job creates is the job's cost; an existing one is not
+        fsx_lustre = self.job.params.fsx_lustre
+        return bool(fsx_lustre.enabled) and not fsx_lustre.existing_fsx
 
     @property
     def fsx_lustre_unit_price(self) -> float:
@@ -130,7 +132,7 @@ class PricingHelper:
     @property
     def fsx_lustre_size(self) -> SocaMemory:
         fsx_lustre = self.job.params.fsx_lustre
-        if not fsx_lustre.enabled:
+        if not self.is_fsx_lustre_enabled:
             return SocaMemory.zero(SocaMemoryUnit.GB)
         if fsx_lustre.size is not None:
             return fsx_lustre.size

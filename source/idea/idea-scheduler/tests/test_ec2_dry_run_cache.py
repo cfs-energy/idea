@@ -210,6 +210,10 @@ def test_the_dry_run_refusal_does_not_carry_aws_identifiers(context, monkeypatch
         provisioning_util.ec2_dry_run()
 
     message = exc_info.value.message
+    assert message == (
+        "AWS refused a test launch of hpc7g.16xlarge, so this job can't start. "
+        'Try another instance type, or ask an administrator.'
+    )
     assert '123456789012' not in message
     assert 'arn:aws:sts' not in message
     assert 'subnet-0abc1234def567890' not in message

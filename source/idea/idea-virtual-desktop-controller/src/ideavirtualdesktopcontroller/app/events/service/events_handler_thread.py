@@ -8,7 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from typing import Dict
+from typing import Dict, Optional
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import errorcodes
@@ -208,9 +208,6 @@ class EventsHandlerThread(IdeaThread):
 
         delete_message_info = []
         do_not_process_message_group_ids = set()
-        max_receive_count = self.context.config().get_int(
-            'virtual-desktop-controller.events.max_receive_count', default=3
-        )
         for message in Utils.get_value_as_list('Messages', response, []):
             message_id = Utils.get_value_as_string('MessageId', message, None)
             self._logger.debug(f'[msg-id: {message_id}] processing message')
@@ -226,6 +223,7 @@ class EventsHandlerThread(IdeaThread):
 
             message_body_str = Utils.get_value_as_string('Body', message, None)
             should_delete_message = False
+            event = None
 
             if not self._is_checksum_valid(md5checksum, message_body_str):
                 self._logger.error(
@@ -233,28 +231,20 @@ class EventsHandlerThread(IdeaThread):
                 )
                 should_delete_message = True
             else:
-                message_body = Utils.from_json(message_body_str)
+                event = self._decode_event(message_id, sender_id, message_body_str)
 
-                # Fix for incorrectly serialized event_type values
-                if 'event_type' in message_body and isinstance(
-                    message_body['event_type'], str
-                ):
-                    if message_body['event_type'].startswith(
-                        'VirtualDesktopEventType.'
-                    ):
-                        # Extract just the enum value without the class prefix
-                        message_body['event_type'] = message_body['event_type'].replace(
-                            'VirtualDesktopEventType.', ''
-                        )
-
-                event = VirtualDesktopEvent(**message_body)
-
+            if event is None:
+                # undecodable: removed without touching the rest of the batch
+                should_delete_message = True
+            else:
                 self._logger.info(
                     f'[msg-id: {message_id}] Handling message of type {event.event_type}'
                 )
                 if Utils.is_empty(event.event_type):
                     # There is some error. DO NOT PROCESS. IGNORE MESSAGE.
-                    self._logger.error(f'Error in message {message_body}')
+                    self._logger.error(
+                        f'[msg-id: {message_id}] Error in message: no event type'
+                    )
                     should_delete_message = True
 
                 elif event.event_type not in self.EVENT_HANDLER_MAP:
@@ -293,16 +283,12 @@ class EventsHandlerThread(IdeaThread):
                             self.EVENT_HANDLER_MAP[event.event_type].log_exception(
                                 message_id=message_id, exception=e
                             )
-                            should_delete_message = self._is_poison_message(
-                                message_id, event, receive_count, max_receive_count
-                            )
+                            self._log_redelivery(message_id, event, receive_count)
                     except Exception as e:
                         self._logger.exception(
                             f'[msg-id: {message_id}] Error handling message. Error: {e}'
                         )
-                        should_delete_message = self._is_poison_message(
-                            message_id, event, receive_count, max_receive_count
-                        )
+                        self._log_redelivery(message_id, event, receive_count)
                 elif message_group_id in do_not_process_message_group_ids:
                     self._logger.debug(
                         f'[msg-id: {message_id}] Issue in handling message of type {event.event_type}. Because for prior errors in message_group_id: {message_group_id}. Will not delete the message'
@@ -339,24 +325,39 @@ class EventsHandlerThread(IdeaThread):
             )
             # self._logger.info(f'Delete message response {response}')
 
-    def _is_poison_message(
-        self,
-        message_id: str,
-        event: VirtualDesktopEvent,
-        receive_count: int,
-        max_receive_count: int,
-    ) -> bool:
-        # a handler that fails every time must not hold its message group forever: after
-        # max_receive_count redeliveries the message is dropped rather than blocking it
-        if receive_count < max_receive_count:
-            return False
+    def _decode_event(
+        self, message_id: str, sender_id: str, body: Optional[str]
+    ) -> Optional[VirtualDesktopEvent]:
+        """the event in one message, or None when it is not one; one message only"""
+        try:
+            message_body = Utils.from_json(body)
+            # Fix for incorrectly serialized event_type values
+            event_type = message_body.get('event_type')
+            if isinstance(event_type, str) and event_type.startswith(
+                'VirtualDesktopEventType.'
+            ):
+                message_body['event_type'] = event_type.replace(
+                    'VirtualDesktopEventType.', ''
+                )
+            return VirtualDesktopEvent(**message_body)
+        except Exception as e:
+            self._logger.error(
+                f'[msg-id: {message_id}] from {sender_id}: not a desktop event, removed: {e}'
+            )
+            return None
+
+    def _log_redelivery(
+        self, message_id: str, event: VirtualDesktopEvent, receive_count: int
+    ):
+        # the queue's redrive policy moves a message that keeps failing to the dead-letter
+        # queue, where it stays for an operator; nothing is deleted here
         idea_session_id = Utils.get_value_as_string(
             'idea_session_id', event.detail, None
         )
         self._logger.error(
-            f'[msg-id: {message_id}] handling failed {receive_count} times for event_type: {event.event_type}, idea_session_id: {idea_session_id}. Deleting the message instead of blocking the queue.'
+            f'[msg-id: {message_id}] handling failed {receive_count} time(s) for event_type: '
+            f'{event.event_type}, idea_session_id: {idea_session_id}; it is redelivered'
         )
-        return True
 
     @staticmethod
     def _is_checksum_valid(md5checksum: str, body: str) -> bool:

@@ -40,9 +40,17 @@ class TerminalAPI(BaseAPI):
                 and set(payload) == {'target', 'client'}
                 and isinstance(payload['target'], str)
             ):
+                # the shell is bound to the session that asks for it: ended or reused
+                # since, it gets no ticket, and the watchdog closes it if ended later
+                signed_in_ms = self.context.accounts.session_signed_in_ms(
+                    context.get_username(), context.get_decoded_token()
+                )
                 context.success(
                     service.create_ticket(
-                        context.get_username(), payload['target'], payload['client']
+                        context.get_username(),
+                        payload['target'],
+                        payload['client'],
+                        signed_in_ms,
                     )
                 )
             else:

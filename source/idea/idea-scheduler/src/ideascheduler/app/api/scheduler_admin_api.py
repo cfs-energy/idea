@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.api.active_jobs import list_active_job_page
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideadatamodel import (
     exceptions,
@@ -61,6 +62,21 @@ from ideadatamodel.scheduler import (
     SocaJob,
     SocaScalingMode,
 )
+from ideadatamodel.scheduler import (
+    GetScratchCleanupStatusRequest,
+    GetScratchCleanupStatusResult,
+    ListScratchCleanupAuditRequest,
+    ListScratchCleanupAuditResult,
+    ListScratchCleanupPreviewRequest,
+    ListScratchCleanupPreviewResult,
+    PreviewScratchCleanupRequest,
+    PreviewScratchCleanupResult,
+    BackfillScratchCleanupRequest,
+    BackfillScratchCleanupResult,
+    ListScratchCleanupUpcomingRequest,
+    ListScratchCleanupUpcomingResult,
+    ScratchCleanupRow,
+)
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils
 from ideascheduler.app.metrics.job_metrics_backfill import JobMetricsBackfill
@@ -82,6 +98,21 @@ from ideascheduler.app.provisioning.job_provisioner.job_provisioning_util import
 from typing import Optional
 
 
+def refuse_validation_names(queue_profile) -> None:
+    """the iv- prefix is the image canary's own; an administrator profile or queue is never given it"""
+    from ideascheduler.app.images.compute_image_canary import VALIDATION_QUEUE_PREFIX
+
+    if queue_profile is None:
+        # the service refuses a missing profile with its own message
+        return
+    names = [queue_profile.name or ''] + list(queue_profile.queues or [])
+    if any(name.startswith(VALIDATION_QUEUE_PREFIX) for name in names):
+        raise exceptions.invalid_params(
+            f'Queue profile and queue names cannot start with {VALIDATION_QUEUE_PREFIX}: '
+            f'it is kept for the image validation queues IDEA creates and removes.'
+        )
+
+
 class SchedulerAdminAPI(BaseAPI):
     def __init__(self, context: ideascheduler.AppContext):
         self.context = context
@@ -99,6 +130,31 @@ class SchedulerAdminAPI(BaseAPI):
             'SchedulerAdmin.GetJobMetricsBackfill': {
                 'scope': None,
                 'method': self.get_job_metrics_backfill,
+            },
+            # scope None: elevated users only, never an application token
+            'SchedulerAdmin.GetScratchCleanupStatus': {
+                'scope': None,
+                'method': self.get_scratch_cleanup_status,
+            },
+            'SchedulerAdmin.PreviewScratchCleanup': {
+                'scope': None,
+                'method': self.preview_scratch_cleanup,
+            },
+            'SchedulerAdmin.ListScratchCleanupPreview': {
+                'scope': None,
+                'method': self.list_scratch_cleanup_preview,
+            },
+            'SchedulerAdmin.BackfillScratchCleanup': {
+                'scope': None,
+                'method': self.backfill_scratch_cleanup,
+            },
+            'SchedulerAdmin.ListScratchCleanupUpcoming': {
+                'scope': None,
+                'method': self.list_scratch_cleanup_upcoming,
+            },
+            'SchedulerAdmin.ListScratchCleanupAudit': {
+                'scope': None,
+                'method': self.list_scratch_cleanup_audit,
             },
             'SchedulerAdmin.ListActiveJobs': {
                 'scope': self.SCOPE_READ,
@@ -168,8 +224,10 @@ class SchedulerAdminAPI(BaseAPI):
                 'scope': self.SCOPE_WRITE,
                 'method': self.provision_always_on_nodes,
             },
+            # no scope: the availability command runs on the scheduler, so only an
+            # administrator sets it, never an application token
             'SchedulerAdmin.CreateHpcLicenseResource': {
-                'scope': self.SCOPE_READ,
+                'scope': None,
                 'method': self.create_license_resource,
             },
             'SchedulerAdmin.GetHpcLicenseResource': {
@@ -177,11 +235,11 @@ class SchedulerAdminAPI(BaseAPI):
                 'method': self.get_license_resource,
             },
             'SchedulerAdmin.UpdateHpcLicenseResource': {
-                'scope': self.SCOPE_WRITE,
+                'scope': None,
                 'method': self.update_license_resource,
             },
             'SchedulerAdmin.DeleteHpcLicenseResource': {
-                'scope': self.SCOPE_WRITE,
+                'scope': None,
                 'method': self.delete_license_resource,
             },
             'SchedulerAdmin.ListHpcLicenseResources': {
@@ -239,18 +297,20 @@ class SchedulerAdminAPI(BaseAPI):
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
-        page_size = payload.page_size
-        page_start = payload.page_start
-
-        entries = self.context.job_cache.list_jobs(_limit=page_size, _offset=page_start)
-        apply_waiting_signals(context=self.context, jobs=entries)
-        total = self.context.job_cache.get_count()
+        entries, total = list_active_job_page(self.context, payload)
+        # the administrator's view of waiting jobs needs the caller's role (SCHED-24)
+        apply_waiting_signals(
+            context=self.context,
+            jobs=entries,
+            is_administrator=context.is_administrator(),
+        )
 
         context.success(
             ListJobsResult(
                 paginator=SocaPaginator(
                     total=total, page_size=payload.page_size, start=payload.page_start
                 ),
+                filters=payload.filters,
                 listing=entries,
             )
         )
@@ -293,6 +353,7 @@ class SchedulerAdminAPI(BaseAPI):
         try:
             payload = context.get_request_payload_as(CreateQueueProfileRequest)
             queue_profile = payload.queue_profile
+            refuse_validation_names(queue_profile)
             created = self.context.queue_profiles.create_queue_profile(queue_profile)
             context.success(CreateQueueProfileResult(queue_profile=created))
         except exceptions.SocaException as e:
@@ -309,6 +370,7 @@ class SchedulerAdminAPI(BaseAPI):
         try:
             payload = context.get_request_payload_as(UpdateQueueProfileRequest)
             queue_profile = payload.queue_profile
+            refuse_validation_names(queue_profile)
             created = self.context.queue_profiles.update_queue_profile(queue_profile)
             context.success(UpdateQueueProfileResult(queue_profile=created))
         except exceptions.SocaException as e:
@@ -534,6 +596,7 @@ class SchedulerAdminAPI(BaseAPI):
             raise e
 
     def create_license_resource(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
         request = context.get_request_payload_as(CreateHpcLicenseResourceRequest)
         result = self.context.license_service.create_license_resource(request)
         context.success(result)
@@ -544,11 +607,13 @@ class SchedulerAdminAPI(BaseAPI):
         context.success(result)
 
     def update_license_resource(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
         request = context.get_request_payload_as(UpdateHpcLicenseResourceRequest)
         result = self.context.license_service.update_license_resource(request)
         context.success(result)
 
     def delete_license_resource(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
         request = context.get_request_payload_as(DeleteHpcLicenseResourceRequest)
         result = self.context.license_service.delete_license_resource(request)
         context.success(result)
@@ -695,6 +760,82 @@ class SchedulerAdminAPI(BaseAPI):
                 schedule=schedule,
                 last_run_on=Utils.to_datetime(last_run_ms) if last_run_ms else None,
                 next_run_on=schedule.next_run_after(now),
+            )
+        )
+
+    # scratch cleanup
+    def _scratch_cleanup(self):
+        service = getattr(self.context, 'scratch_cleanup', None)
+        if service is None:
+            raise exceptions.invalid_params('Scratch cleanup is not available.')
+        return service
+
+    def get_scratch_cleanup_status(self, context: ApiInvocationContext):
+        context.get_request_payload_as(GetScratchCleanupStatusRequest)
+        service = getattr(self.context, 'scratch_cleanup', None)
+        status = service.status() if service is not None else {'available': False}
+        context.success(GetScratchCleanupStatusResult(**status))
+
+    @staticmethod
+    def _require_cluster_administrator(context: ApiInvocationContext):
+        # scratch cleanup walks every owner's job folders; a license check runs a command on
+        # the scheduler. both are for administrators only, as the settings are
+        if not context.is_administrator():
+            raise exceptions.unauthorized_access()
+
+    def preview_scratch_cleanup(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
+        request = context.get_request_payload_as(PreviewScratchCleanupRequest)
+        self._scratch_cleanup().start_preview(
+            request.file_system,
+            requested_by=context.get_username(),
+        )
+        context.success(PreviewScratchCleanupResult(started=True))
+
+    def list_scratch_cleanup_preview(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
+        request = context.get_request_payload_as(ListScratchCleanupPreviewRequest)
+        listing, total = self._scratch_cleanup().list_preview(
+            request.preview_id, request.action, request.page_start, request.page_size
+        )
+        context.success(
+            ListScratchCleanupPreviewResult(
+                listing=[ScratchCleanupRow(**row) for row in listing],
+                paginator=SocaPaginator(
+                    total=total, page_size=request.page_size, start=request.page_start
+                ),
+            )
+        )
+
+    def backfill_scratch_cleanup(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
+        request = context.get_request_payload_as(BackfillScratchCleanupRequest)
+        run_id = self._scratch_cleanup().start_backfill(
+            request.preview_id, request.confirm_phrase, context.get_username()
+        )
+        context.success(BackfillScratchCleanupResult(run_id=run_id))
+
+    def list_scratch_cleanup_upcoming(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ListScratchCleanupUpcomingRequest)
+        listing, token = self._scratch_cleanup().list_upcoming(
+            request.page_size, request.cursor
+        )
+        context.success(
+            ListScratchCleanupUpcomingResult(
+                listing=[ScratchCleanupRow(**row) for row in listing],
+                next_token=token,
+            )
+        )
+
+    def list_scratch_cleanup_audit(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ListScratchCleanupAuditRequest)
+        listing, token = self._scratch_cleanup().list_audit(
+            request.page_size, request.cursor
+        )
+        context.success(
+            ListScratchCleanupAuditResult(
+                listing=[ScratchCleanupRow(**row) for row in listing],
+                next_token=token,
             )
         )
 

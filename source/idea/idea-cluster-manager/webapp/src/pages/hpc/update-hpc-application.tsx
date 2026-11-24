@@ -37,6 +37,7 @@ import 'ace-builds/css/theme/github_light_default.css';
 import SampleJobScriptSimple from "./sample-job-script-simple.txt?url"
 import SampleJobScriptJinja2 from "./sample-job-script-jinja2.txt?url"
 import SampleJobParams from "./sample-job-params.json"
+import {listAllProjects} from "./hpc-utils";
 
 
 export interface UpdateHpcApplicationProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -112,6 +113,12 @@ function AvailableVariable(props: AvailableVariableProps) {
             </Box>
         </div>
     )
+}
+
+// Without useWebWorker: false the library loads its worker script from cdn.jsdelivr.net, which a
+// cluster without internet egress cannot reach and the portal should not run in any case.
+export function resizeApplicationIcon(file: File): Promise<File> {
+    return imageCompression(file, {maxWidthOrHeight: 150, useWebWorker: false})
 }
 
 class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHpcApplicationState> {
@@ -288,9 +295,7 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
 
     resizeImage(file: File): Promise<File> {
         return new Promise(resolve => {
-            imageCompression(file, {
-                maxWidthOrHeight: 150
-            }).then(file => {
+            resizeApplicationIcon(file).then(file => {
                 resolve(file)
             })
         })
@@ -743,13 +748,9 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
                                                     module="submit-application-profile"
                                                     value={this.state.project_ids}
                                                     onFetchOptions={event => {
-                                                        return AppContext.get().client().projects().listProjects({
-                                                            paginator: {
-                                                                page_size: 100
-                                                            }
-                                                        }).then(result => {
+                                                        return listAllProjects(AppContext.get().client().projects()).then(projects => {
                                                             let choices: any = []
-                                                            result.listing?.forEach(project => {
+                                                            projects.forEach(project => {
                                                                 choices.push({
                                                                     title: project.title,
                                                                     value: project.project_id,

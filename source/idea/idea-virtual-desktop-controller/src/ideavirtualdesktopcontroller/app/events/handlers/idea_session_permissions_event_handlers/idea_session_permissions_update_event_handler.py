@@ -12,6 +12,9 @@
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSessionState
 from ideasdk.utils import Utils
+from ideavirtualdesktopcontroller.app.session_permissions import (
+    constants,
+)
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
     VirtualDesktopEvent,
 )
@@ -51,19 +54,23 @@ class IDEASessionPermissionsUpdateEventHandler(
             )
             return
 
+        details = {}
+        if Utils.is_not_empty(new_name):
+            details[constants.SESSION_PERMISSIONS_DB_IDEA_SESSION_NAME_KEY] = new_name
+        if Utils.is_not_empty(new_instance_type):
+            details[constants.SESSION_PERMISSIONS_DB_IDEA_SESSION_INSTANCE_TYPE_KEY] = (
+                new_instance_type
+            )
+        if Utils.is_not_empty(new_state):
+            details[constants.SESSION_PERMISSIONS_DB_IDEA_SESSION_STATE_KEY] = (
+                VirtualDesktopSessionState(new_state).value
+            )
+        if not details:
+            return
         for session_permission in session_permissions:
-            is_updated = False
-            if Utils.is_not_empty(new_name):
-                session_permission.idea_session_name = new_name
-                is_updated = True
-            if Utils.is_not_empty(new_instance_type):
-                session_permission.idea_session_instance_type = new_instance_type
-                is_updated = True
-            if Utils.is_not_empty(new_state):
-                session_permission.idea_session_state = VirtualDesktopSessionState(
-                    new_state
-                )
-                is_updated = True
-
-            if is_updated:
-                self.session_permissions_db.update(session_permission)
+            # only the desktop's display fields: a share revoked or changed since the read stays so
+            self.session_permissions_db.update_session_details(
+                session_permission.idea_session_id,
+                session_permission.actor_name,
+                details,
+            )

@@ -13,7 +13,7 @@ import pathlib
 import re
 from ideascheduler.app.api import scheduler_api
 
-from ideadatamodel import errorcodes, exceptions, SocaJob
+from ideadatamodel import errorcodes, exceptions, Project, SocaJob
 from ideadatamodel.scheduler import DryRunOption, SubmitJobRequest, SubmitJobResult
 from ideascheduler.app.api.scheduler_api import (
     JobSubmissionDeduplicator,
@@ -39,6 +39,18 @@ def build_request(
         job_script=job_script,
         client_submission_id=client_submission_id,
     )
+
+
+@pytest.fixture(autouse=True)
+def member_of_mockproject(request, monkeypatch):
+    # submit_job checks the requested project against the owner's memberships
+    if 'context' in request.fixturenames:
+        context = request.getfixturevalue('context')
+        monkeypatch.setattr(
+            context.projects_client,
+            'get_user_projects',
+            lambda username: [Project(name='mockproject')],
+        )
 
 
 def build_result(accepted: bool, job_id: str = '1001') -> SubmitJobResult:
@@ -317,3 +329,22 @@ def test_maintenance_blocks_new_work_and_releases_reservation(
     context.config().put(scheduler_api.MAINTENANCE_ENABLED_CONFIG_KEY, False)
     api.submit_job(build_invocation_context(context, request.model_dump()))
     assert len(recorder.calls) == 2
+
+
+def test_a_retry_after_a_qsub_timeout_does_not_reach_qsub_again(context):
+    # the timed-out qsub may have queued the job: the same submission id is refused
+    timed_out = exceptions.soca_exception(
+        errorcodes.JOB_SUBMISSION_FAILED, 'The submission did not finish'
+    )
+    timed_out.submission_indeterminate = True
+    api = SchedulerAPI(context=context)
+    recorder = SubmitJobRecorder([timed_out, build_result(accepted=True)])
+    api._submit_job = recorder
+
+    with pytest.raises(exceptions.SocaException):
+        submit(api, build_request())
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        submit(api, build_request())
+
+    assert exc_info.value.error_code == errorcodes.JOB_SUBMISSION_IN_PROGRESS
+    assert len(recorder.calls) == 1

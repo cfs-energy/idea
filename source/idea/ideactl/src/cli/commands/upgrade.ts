@@ -3,6 +3,8 @@
  * sequence. Each external operation is injected so callers can replay it.
  */
 
+import { refuseLustreSharedStorage } from "../../config/values.ts";
+import { WIDE_BROKER_CLIENT_RULE } from "../../cdk/broker-rules.ts";
 import { refreshHostsCommand } from "../host-pool.ts";
 import { liveContainerHosts } from "../live-operator-adapters.ts";
 
@@ -24,7 +26,9 @@ import {
 import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../../config/region-ami.ts";
 import {
   compareUpgradeDrift,
+  isLiveModuleSetRow,
   isOperatorSource,
+  isTemplateDefaultKey,
   VALUES_OWNED_KEYS,
   renderUpgradeDrift,
   type CurrentConfigRow,
@@ -37,15 +41,17 @@ import { vpcEndpointsFor } from "../../config/vpc-endpoints.ts";
 import { ideaVersion } from "../../version.ts";
 import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
 import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
-import { DeploymentHelper } from "../deployment-helper.ts";
+import { DEFAULT_MAX_PARALLEL, DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData, type StackTiming } from "../deployment-helper.ts";
 import { compareIdeaRelease, upgradeFloorRefusal, HOST_CONTROL_PLANE_REFUSAL, RECOVERY_COMMAND } from "../upgrade-floor.ts";
 import {
   buildTree,
+  renderTable,
   toYaml,
   type ConfigDriftPreviewDeps,
   type ConfigUpgradePreviewOptions,
 } from "./config.ts";
 import { asBoolFlag } from "./deploy.ts";
+import { liveClusterHealth, registerVerifyClusterCommand, SETTLE_LIMIT_MS, verifyCluster, type ClusterHealthApi } from "./verify-cluster.ts";
 
 export const EOL_BASE_OS: Readonly<Record<string, string>> = {
   amazonlinux2: "amazonlinux2023",
@@ -161,6 +167,9 @@ const OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = "m5.large.search";
 // 26.11.1 collects Cost Explorer spend once a day; earlier releases installed six hours.
 const COST_INTERVAL_HOURS = 24;
 const COST_INTERVAL_HOURS_OLD = 6;
+// Cost Explorer posted the first of the month's tax after a three-day window had moved past it.
+const COST_LOOKBACK_DAYS = 7;
+const COST_LOOKBACK_DAYS_OLD = 3;
 const COMPUTE_IMAGE_PREFIX = ["idea", "compute", "node", ""].join("-");
 
 const AMI_UPDATE_KEYS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
@@ -224,6 +233,9 @@ export interface UpgradeDeploymentOptions {
   allModules: boolean;
   moduleIds?: readonly string[];
   allowReplacement?: readonly string[];
+  onStack?: (event: StackTiming) => void;
+  serial?: boolean;
+  maxParallel?: number;
 }
 
 export interface ContainerHost {
@@ -233,6 +245,8 @@ export interface ContainerHost {
   status: string;
   runningTasks: number;
   registeredAt?: string;
+  /** false when the host's container agent is not connected: it takes no task */
+  agentConnected?: boolean;
 }
 
 /** The container host group behind a cluster's capacity provider. */
@@ -241,6 +255,8 @@ export interface ContainerHostsApi {
     current: { id: string; version: string };
     instances: Array<{ instanceId: string; id?: string; version?: string }>;
   }>;
+  /** The fstab lines one launch template version's user data mounts; undefined when it cannot be read. */
+  launchTemplateMountLines(input: { awsRegion: string; awsProfile?: string; id: string; version: string }): Promise<string[] | undefined>;
   startInstanceRefresh(input: {
     awsRegion: string; awsProfile?: string; name: string; preferences: {
       MinHealthyPercentage: number; MaxHealthyPercentage?: number; InstanceWarmup: number; ScaleInProtectedInstances: "Refresh" | "Ignore" | "Wait";
@@ -268,6 +284,8 @@ export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   openSearch: UpgradeOpenSearchApi;
   eolSoftwareStacks: EolSoftwareStackApi;
   deploy(options: UpgradeDeploymentOptions): Promise<void>;
+  /** The reads behind the end-of-upgrade verification; without it those lines read "not checked". */
+  clusterHealth?: ClusterHealthApi;
   regionAmiConfig?: () => RegionsConfig;
   /** Whether the registry serves this tagged image; throws when the registry cannot say. */
   releaseImageExists?: (image: string) => Promise<boolean>;
@@ -294,6 +312,8 @@ export interface UpgradeCommandOptions {
   disableEolStacksInUse?: boolean;
   modules?: readonly string[];
   allowReplacement?: string[];
+  serial?: boolean;
+  maxParallel?: string | number;
 }
 
 interface EolStack {
@@ -660,11 +680,21 @@ function moduleSetEntryModule(key: string): string | undefined {
 // this release no longer generates are removed only once every stack has deployed and nothing
 // running reads them. The writer deletes by prefix, so a key that prefixes another current key is
 // left alone and named.
+// A row the operator wrote (portal or command line) is the operator's, generated or not: a pin
+// such as `package_config.efs_utils.commit` is set by hand and never by the template, and Phase 2
+// keeps operator rows by the same rule.
 async function removeObsoleteGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions, configDir: string): Promise<void> {
   if (!existsSync(join(configDir, "idea.yml"))) return;
   const generated = new Set(convertConfigToKeyValuePairs(configDir, "global-settings").map((entry) => entry.key));
-  const current = (await scanAll(deps, `${options.clusterName}.cluster-settings`)).map((row) => String(row["key"]));
-  const obsolete = current.filter((key) => key.startsWith("global-settings.") && !generated.has(key)).sort();
+  const rows = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const current = rows.map((row) => String(row["key"]));
+  const operator = new Set(rows.filter((row) => isOperatorSource(row["source"])).map((row) => String(row["key"])));
+  const notGenerated = current.filter((key) => key.startsWith("global-settings.") && !generated.has(key)).sort();
+  const kept = notGenerated.filter((key) => operator.has(key));
+  if (kept.length > 0) deps.out(`Operator values kept although no longer generated: ${kept.join(", ")}`);
+  const otherSets = notGenerated.filter((key) => !operator.has(key) && isLiveModuleSetRow(key, generated));
+  if (otherSets.length > 0) deps.out(`Module set rows kept for the cluster's other module sets: ${otherSets.join(", ")}`);
+  const obsolete = notGenerated.filter((key) => !operator.has(key) && !otherSets.includes(key));
   if (obsolete.length === 0) return;
   const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
   for (const key of obsolete) {
@@ -869,13 +899,34 @@ async function planOpenSearchDataNodeInstanceType(
  * The cost collector's interval moves from the old default to the new one only when the row still
  * holds the old default and the operator did not write it. Any other value, a row the operator
  * set, or no row at all is left alone; a second upgrade finds 24 and plans nothing.
+ *
+ * `config update` at install stamps every row it writes `cli` at version 1, so such a row holding
+ * the old default is the template's, not a choice. Every later write raises the version, so a row
+ * an operator set with `config set` or the portal, even back to the old default, stays.
  */
 export function planCostIntervalDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return planCostSettingDefault(modules, settings, "interval_hours", COST_INTERVAL_HOURS_OLD, COST_INTERVAL_HOURS);
+}
+
+/** The cost lookback moves under the same rule as the interval. */
+export function planCostLookbackDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return planCostSettingDefault(modules, settings, "lookback_days", COST_LOOKBACK_DAYS_OLD, COST_LOOKBACK_DAYS);
+}
+
+function planCostSettingDefault(
+  modules: ModuleInfo[],
+  settings: readonly CurrentConfigRow[],
+  name: string,
+  oldDefault: number,
+  newDefault: number,
+): ConfigEntry[] {
   return modules.filter((module) => module.name === "cluster-manager").flatMap((module) => {
-    const key = `${module.module_id}.metrics.cost.interval_hours`;
+    const key = `${module.module_id}.metrics.cost.${name}`;
     const row = settings.find((entry) => entry.key === key);
-    if (row === undefined || row.value !== COST_INTERVAL_HOURS_OLD || isOperatorSource(row.source)) return [];
-    return [{ key, value: COST_INTERVAL_HOURS }];
+    if (row === undefined || row.value !== oldDefault) return [];
+    const installed = row.source === "cli" && row.version === 1;
+    if (isOperatorSource(row.source) && !installed) return [];
+    return [{ key, value: newDefault }];
   });
 }
 
@@ -951,8 +1002,9 @@ export async function planUpgradePhase3Entries(
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
     ...planCostIntervalDefault(modules, settings),
+    ...planCostLookbackDefault(modules, settings),
     ...planDcvUbuntuPins(settings, deps.out),
-    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
+    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure, releaseVersion),
   ];
 }
 
@@ -971,11 +1023,21 @@ export async function verifyReleaseImage(
   settings: readonly CurrentConfigRow[],
   skipReleaseImageCheck = false,
   onFailure?: (message: string) => void,
+  releaseVersion: string = ideaVersion(),
 ): Promise<ConfigEntry[]> {
   const move = entries.find((entry) => entry.key === "ecs.image");
   if (move === undefined) {
     const rows = new Map(settings.map((row) => [row.key, row.value]));
     const image = rows.get("ecs.image");
+    const pinned = pinnedReleaseOf(rows);
+    if (pinned !== undefined && (compareIdeaRelease(pinned, releaseVersion) ?? 0) < 0) {
+      // The new bastion health check needs this release's image; stop before any write.
+      const message = `ecs.image ${String(image)} is a ${pinned} build the upgrade leaves in place, older than ${releaseVersion}, ` +
+        `so nothing was changed. Set ecs.image to a ${releaseVersion} or later image and run the upgrade again.`;
+      if (onFailure === undefined) throw new Error(message);
+      onFailure(message);
+      return entries;
+    }
     if (typeof image === "string" && image.includes("@sha256:") &&
       image !== rows.get("ecs.release_image") && image !== rows.get("ecs.previous_release_image")) {
       deps.out(`ecs.image stays ${image}; this digest is an operator pin and does not follow releases.`);
@@ -1144,12 +1206,7 @@ export function planEcsImageFollowsRelease(
   const image = typeof storedImage === "string" &&
     (storedImage === rows.get("ecs.release_image") || storedImage === rows.get("ecs.previous_release_image"))
     ? storedImage.replace(/@sha256:[a-f0-9]{64}$/, "") : storedImage;
-  const partition = rows.get("cluster.aws.partition") ?? "aws";
-  const configured = rows.get(`ecs.image_repositories.${String(partition)}`);
-  // GovCloud can pull the public release image without a separate registry.
-  const repository = partition === "aws-us-gov" && (configured == null || configured === "")
-    ? rows.get("ecs.image_repositories.aws")
-    : configured;
+  const repository = releaseRepository(rows);
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
@@ -1163,6 +1220,28 @@ export function planEcsImageFollowsRelease(
   return [{ key: "ecs.image", value: `${repository}:${releaseVersion}` }];
 }
 
+function releaseRepository(rows: ReadonlyMap<string, unknown>): unknown {
+  const partition = rows.get("cluster.aws.partition") ?? "aws";
+  const configured = rows.get(`ecs.image_repositories.${String(partition)}`);
+  // GovCloud can pull the public release image without a separate registry.
+  return partition === "aws-us-gov" && (configured == null || configured === "")
+    ? rows.get("ecs.image_repositories.aws")
+    : configured;
+}
+
+/**
+ * The release an operator-pinned `repository:<release or candidate>@sha256:...` image names.
+ * Anything else (a bare digest, another repository, a build tag) cannot be read and is undefined.
+ */
+function pinnedReleaseOf(rows: ReadonlyMap<string, unknown>): string | undefined {
+  const image = rows.get("ecs.image");
+  const repository = releaseRepository(rows);
+  if (typeof image !== "string" || typeof repository !== "string" || repository === "") return undefined;
+  if (!image.startsWith(`${repository}:`)) return undefined;
+  const tag = image.slice(repository.length + 1).replace(/@sha256:[a-f0-9]{64}$/, "");
+  return CANDIDATE_IMAGE_TAG.exec(tag)?.[1] ?? (RELEASE_IMAGE_TAG.test(tag) ? tag : undefined);
+}
+
 /** Apply the already previewed Phase 3 plan without recalculating it after approval. */
 async function applyPhase3Entries(
   writer: Awaited<ReturnType<UpgradeDeps["configWriter"]>>,
@@ -1172,7 +1251,9 @@ async function applyPhase3Entries(
 ): Promise<void> {
   const previous = new Map(current.map((entry) => [entry.key, entry.value]));
   for (const entry of entries) {
-    await writer.setConfigEntry(entry.key, entry.value);
+    // A move to the new template default is the template's value: stamped cli, the row would read
+    // as an operator's from then on, and the template refresh and later default moves would skip it.
+    await writer.setConfigEntry(entry.key, entry.value, isTemplateDefaultKey(entry.key) ? "template" : "cli");
     if (entry.key === "ecs.image") {
       out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; every task rolls to the release image`);
     } else if (entry.key === "metrics.provider") {
@@ -1186,6 +1267,8 @@ async function applyPhase3Entries(
       out(`analytics data nodes move from ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} to ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a blue/green deployment.`);
     } else if (entry.key.endsWith(".metrics.cost.interval_hours")) {
       out(`${entry.key} moves from the old default ${COST_INTERVAL_HOURS_OLD} to ${COST_INTERVAL_HOURS}; cost collection runs once a day from the next cycle`);
+    } else if (entry.key.endsWith(".metrics.cost.lookback_days")) {
+      out(`${entry.key} moves from the old default ${COST_LOOKBACK_DAYS_OLD} to ${COST_LOOKBACK_DAYS}; each collection re-reads a week of Cost Explorer days from the next cycle`);
     } else if (entry.key.startsWith("global-settings.package_config.dcv.")) {
       out(`${entry.key} moves from the old default ${String(previous.get(entry.key))} to the pinned ${String(entry.value)}`);
     }
@@ -1424,7 +1507,7 @@ async function saveValuesFile(deps: UpgradeDeps, options: UpgradeCommandOptions)
         ? `s3://${bucket}/${VALUES_FILE_S3_KEY}`
         : "the cluster bucket";
     deps.out(
-      `warning: Upgrade of ${options.clusterName} finished its stack steps, but values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
+      `warning: Upgrade of ${options.clusterName}: values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
     );
   }
 }
@@ -1446,6 +1529,9 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
     moduleIds: options.moduleIds,
     rollback: options.rollback,
     allowReplacement: options.allowReplacement,
+    onStack: options.onStack,
+    serial: options.serial,
+    maxParallel: options.maxParallel,
     deps,
   });
   await helper.invoke();
@@ -1491,6 +1577,37 @@ async function upgradeDeploysEcs(deps: UpgradeDeps, options: UpgradeCommandOptio
   return modules.some((module) => module.module_id === ECS_MODULE || module.name === ECS_MODULE);
 }
 
+/** The cluster stack's VPC-wide rule on the broker client listener (cluster.ts buildDcvBrokerListener). */
+const WIDE_BROKER_RULE = WIDE_BROKER_CLIENT_RULE;
+
+/**
+ * The cluster stack deploys before the desktop controller stack, so on an upgrade from a release
+ * whose controller stack had no broker listener rules of its own, the cluster stack keeps the
+ * VPC-wide ones. Once this run's controller stack has published its rules, the cluster stack is
+ * deployed once more, which removes the wide rules, and the result is read back. A controller
+ * stack that failed or rolled back publishes nothing, so the wide rules stay.
+ */
+async function convergeBrokerListenerRules(deps: UpgradeDeps, options: UpgradeCommandOptions, deployment: UpgradeDeploymentOptions): Promise<void> {
+  if (deps.cfn.getTemplate === undefined) return;
+  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const owner = settings.find((row) => row["key"] === `global-settings.module_sets.${options.moduleSet}.virtual-desktop-controller.module_id`)?.["value"];
+  if (typeof owner !== "string" || owner === "") return;
+  const rules = settings.find((row) => row["key"] === `${owner}.dcv_broker.listener_ingress_rules`)?.["value"];
+  if (!Array.isArray(rules) || rules.length !== 2) return;
+  const clusterId = settings.find((row) => row["key"] === `global-settings.module_sets.${options.moduleSet}.cluster.module_id`)?.["value"];
+  const clusterModule = typeof clusterId === "string" && clusterId !== "" ? clusterId : "cluster";
+  const clusterStack = `${options.clusterName}-${clusterModule}`;
+  const wide = async () => (await deps.cfn.getTemplate!(clusterStack) ?? "").includes(WIDE_BROKER_RULE);
+  if (!await wide()) return;
+  if (deployment.moduleIds !== undefined && !deployment.moduleIds.includes(clusterModule)) {
+    deps.out(`${clusterStack} still admits the whole VPC to the broker listeners; include the cluster module in an upgrade to remove it`);
+    return;
+  }
+  deps.out("The desktop controller stack holds its own broker listener rules: deploying the cluster stack again to remove the VPC-wide ones");
+  await deps.deploy({ ...deployment, allModules: false, moduleIds: [clusterModule] });
+  if (await wide()) throw new ClusterConfigError(`Completion verification failed: ${clusterStack} still admits the whole VPC to the broker listeners. Every module is upgraded and serving; re-run upgrade-cluster to remove it.`);
+}
+
 /**
  * The module-relative keys a deployed stack's settings resources publish, read from the deployed
  * template. A stack that stops publishing a key (the metrics stack drops its CloudWatch dashboard
@@ -1529,12 +1646,14 @@ async function verifyUpgradeCompletion(
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
   const checkpoints = new Set([
     ...modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
-      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)),
+      // accounts.reconcile.last_run is rewritten by every reconcile, periodic or manual; metrics.backfill.* is the heartbeat of a running backfill.
+      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "accounts.reconcile.last_run", "metrics.backfill.cost"].map((key) => `${module.module_id}.${key}`)),
     ...modules.filter((module) => module.name === "scheduler").flatMap((module) =>
-      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on"].map((key) => `${module.module_id}.${key}`)),
+      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on", "metrics.backfill.jobs"].map((key) => `${module.module_id}.${key}`)),
     // The image pipelines advance their release and monthly checkpoints as soon as the new modules run.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").flatMap((module) =>
-      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release"].map((key) => `${module.module_id}.${key}`)),
+      // The stack expiry digest claims its weekly row on the first tick after the controller starts.
+      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release", "software_stacks.expiry_last_digest_on"].map((key) => `${module.module_id}.${key}`)),
     // The desktop controller records the release it seeded base stacks for when it starts on a new version.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").map((module) => `${module.module_id}.software_stacks.base_stacks_seeded_release`),
   ]);
@@ -1586,8 +1705,81 @@ async function verifyUpgradeCompletion(
   deps.out("Completion verified: settings and deployed module versions read back");
 }
 
+const wholeSeconds = (ms: number): number => Math.round(ms / 1000);
+
+/**
+ * Wall-clock marks for one upgrade run: a line when each phase starts and ends and when each stack
+ * ends, and a table at the end. Measurement only; nothing waits on it.
+ */
+export class UpgradeTiming {
+  private readonly rows: string[][] = [];
+  private startedAt: number | undefined;
+  private current: { name: string; startedAt: number } | undefined;
+  private readonly deps: Pick<UpgradeDeps, "now" | "out">;
+
+  // The clock is first read by the first phase, so a refusal before it touches nothing else.
+  constructor(deps: Pick<UpgradeDeps, "now" | "out">) {
+    this.deps = deps;
+  }
+
+  private mark(at: number): string {
+    return `${new Date(at).toISOString().slice(11, 19)}Z +${wholeSeconds(at - (this.startedAt ?? at))}s`;
+  }
+
+  phase(name: string): void {
+    this.close();
+    const at = this.deps.now();
+    this.startedAt ??= at;
+    this.current = { name, startedAt: at };
+    this.deps.out(`timing ${this.mark(at)}: ${name} started`);
+  }
+
+  stack(event: StackTiming): void {
+    const took = wholeSeconds(event.endedAt - event.startedAt);
+    this.rows.push([this.current?.name ?? "", event.stackName, String(took)]);
+    this.deps.out(`timing ${this.mark(event.endedAt)}: ${event.stackName} ${event.ok ? "deployed" : "failed"} in ${took}s`);
+  }
+
+  /** Closes the open phase and prints the table, whatever the run's outcome. */
+  summary(): void {
+    if (this.startedAt === undefined) return;
+    this.close();
+    this.rows.push(["total", "", String(wholeSeconds(this.deps.now() - this.startedAt))]);
+    this.deps.out(`Upgrade timing (seconds)\n${renderTable(["phase", "stack", "seconds"], this.rows)}`);
+  }
+
+  private close(): void {
+    if (this.current === undefined) return;
+    const at = this.deps.now();
+    const took = wholeSeconds(at - this.current.startedAt);
+    this.rows.push([this.current.name, "", String(took)]);
+    this.deps.out(`timing ${this.mark(at)}: ${this.current.name} took ${took}s`);
+    this.current = undefined;
+  }
+}
+
+/**
+ * The deployment id of an upgrade that did not finish. Phase 2 writes the module-set owners row and
+ * only a completed upgrade removes it; every stack the run deployed published the run's id, the
+ * cluster stack first. Undefined when no upgrade was left unfinished or no stack recorded an id.
+ */
+export function unfinishedUpgradeDeploymentId(settings: readonly Record<string, unknown>[], moduleSet: string): string | undefined {
+  if (!settings.some((row) => row["key"] === "cluster.upgrade_module_set_owners")) return undefined;
+  const clusterModule = settingString(settings, `global-settings.module_sets.${moduleSet}.cluster.module_id`) ?? "cluster";
+  return settingString(settings, `${clusterModule}.deployment_id`);
+}
+
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
+  const timing = new UpgradeTiming(deps);
+  try {
+    await runUpgrade(deps, options, timing);
+  } finally {
+    timing.summary();
+  }
+}
+
+async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, timing: UpgradeTiming): Promise<void> {
   // Validate the source release and deployment mode before any mutation.
   // An incomplete inventory cannot establish a safe starting release.
   const modulesBefore = await clusterModules(deps, options.clusterName);
@@ -1605,7 +1797,37 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
   if (incompleteMigration.length > 0) {
     throw new ClusterConfigError(`Incomplete migration (${incompleteMigration.map((row) => row.key).join(", ")}): recover and complete the previous upgrade with the 26.10.9 administrator first.\nRun from the checkout with your cluster name and region: ${RECOVERY_COMMAND}`);
   }
+  // Refused before anything is written: an analytics upgrade that would drop the VPC-wide OpenSearch
+  // rule while a deployed service holds no rule of its own (the deploy re-checks the same rule).
+  const published = new Set(initialSettings.filter((row) => typeof row.key === "string" && row.key.endsWith(".opensearch_ingress_rule")
+    && typeof row.value === "string" && row.value !== "").map((row) => String(row.key).slice(0, -".opensearch_ingress_rule".length)));
+  const selectedIds = options.modules?.length ? options.modules : modulesBefore.map((module) => module.module_id);
+  refuseAnalyticsAheadOfServices(modulesBefore, selectedIds, true, (module) => published.has(module.module_id));
+  // A module id the modules table does not hold would deploy nothing while the settings are rewritten.
+  const unknown = (options.modules ?? []).filter((id) => !modulesBefore.some((module) => module.module_id === id));
+  if (unknown.length > 0) throw new ClusterConfigError(`Unknown module ${unknown.join(", ")}: this cluster's modules are ${modulesBefore.map((module) => module.module_id).join(", ")}`);
+  // a bad value fails here, before any write, rather than when the deploy starts
+  const terminationProtection = asBoolFlag(options.terminationProtection, true);
+  const maxParallel = Number(options.maxParallel ?? DEFAULT_MAX_PARALLEL);
+  if (!Number.isInteger(maxParallel) || maxParallel < 1) {
+    throw new ClusterConfigError(`--max-parallel must be a whole number of at least 1, not ${String(options.maxParallel)}`);
+  }
+  refuseLustreAppsOrData((key) => {
+    const value = initialSettings.find((row) => row.key === key)?.value;
+    return typeof value === "string" ? value : undefined;
+  });
+  // the values file the run regenerates from is checked too, before the run writes anything
+  const localValues = valuesFilePath(options.clusterName, options.awsRegion);
+  if (existsSync(localValues)) {
+    const values = loadValuesFile(localValues);
+    for (const name of ["apps", "data"] as const) {
+      const provider = values[`storage_${name}_provider`];
+      refuseLustreSharedStorage(name, typeof provider === "string" ? provider : undefined);
+    }
+  }
   let cleared: ClearedInstance[] = [];
+  timing.phase("Pre-flight");
+  const startedAt = deps.now();
   try {
     if (await upgradeDeploysEcs(deps, options)) await checkAwsvpcTrunking(deps, options);
     const baseOs = await resolveUpgradeBaseOs(deps, options);
@@ -1632,15 +1854,21 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
           for (const entry of entries) if (overwrite || !expected.has(entry.key)) expected.set(entry.key, entry.value);
           await writer.syncClusterSettingsInDb(entries, overwrite, source);
         },
-        async setConfigEntry(key, value) { expected.set(key, value); await writer.setConfigEntry(key, value); },
+        async setConfigEntry(key, value, source) { expected.set(key, value); await writer.setConfigEntry(key, value, source); },
         async deleteConfigEntries(prefix) {
           for (const key of expected.keys()) if (key.startsWith(prefix)) expected.delete(key);
           await writer.deleteConfigEntries(prefix);
         },
       };
     };
+    // The stack rows change only after the operator agrees, as the upgrade guide says.
+    if (options.force !== true && eolPlans.some((plan) => plan.toDelete.length > 0 || plan.toDisable.length > 0)) {
+      const confirm = await deps.prompt({ message: "Apply the end-of-life eVDI software stack changes listed above?", default: false });
+      if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
+    }
     await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
 
+    timing.phase("Phase 1");
     deps.out("Phase 1: Update Base OS in values.yml");
     resolveRegionAmi((deps.regionAmiConfig ?? loadRegionAmiConfig)(), options.awsRegion, baseOs);
     await updateValuesBaseOs(deps, options, baseOs);
@@ -1651,6 +1879,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         const confirm = await deps.prompt({ message: "Continue with global settings backup and update?", default: true });
         if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
       }
+      timing.phase("Phase 2");
       deps.out("Phase 2: Global Settings Backup and Update");
       configDir = await backupAndUpdateGlobalSettings(deps, options, modulesBefore);
     }
@@ -1665,10 +1894,12 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         const values = loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion));
         generateConfigFromTemplates(values, configDir, { vpcEndpoints: await vpcEndpointsFor(deps, values, options.awsProfile) });
       }
+      timing.phase("Phase 2b");
       deps.out("Phase 2b: Sync full configuration without overwrite");
       await syncFullConfiguration(deps, options, configDir, modulesBefore);
     }
 
+    timing.phase("Phase 3");
     deps.out("Phase 3: Update AMI IDs and Settings");
     let updateAmis = options.force === true;
     if (options.force !== true) {
@@ -1679,7 +1910,15 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
       await applyPhase3Entries(writer, [...(driftInput.phase3 ?? []), ...(driftInput.providerCutover ?? [])], driftInput.current, deps.out);
     }
+    // This release's task definitions (the bastion health check among them) need this release's
+    // image; deploying them on the stored older one rolls the bastion back and stops the upgrade.
+    const imageMove = (driftInput.phase3 ?? []).find((entry) => entry.key === "ecs.image");
+    if (!updateAmis && imageMove !== undefined) {
+      throw new Error(`Phase 3 (AMI and settings updates) was skipped, so ecs.image is still ${String(driftInput.current.find((row) => row.key === "ecs.image")?.value)}, ` +
+        `and this release's modules cannot deploy on it. Nothing was deployed. Run the upgrade again and answer Yes to the AMI and settings updates.`);
+    }
 
+    timing.phase("Phase 4");
     deps.out("Phase 4: Module Deployment");
     if (!options.force && allModules) {
       const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
@@ -1690,14 +1929,21 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     } catch (error) {
       deps.out(`warning: pre-upgrade termination-protection sweep failed: ${(error as Error).message}. Verify replaced instances are terminated after the upgrade.`);
     }
+    // Reusing an unfinished run's id keeps the templates of the stacks it deployed identical, so a
+    // re-run finds them unchanged (an empty change set, nothing executed) instead of updating each.
+    const resumedId = options.deploymentId ? undefined : unfinishedUpgradeDeploymentId(initialSettings, options.moduleSet);
+    const deploymentId = options.deploymentId || resumedId || deps.uuid();
+    deps.out(resumedId === undefined
+      ? `Deployment id ${deploymentId}. If this run is interrupted, run the same upgrade-cluster command again: it reuses this id, and stacks already deployed show no changes.`
+      : `Deployment id ${deploymentId}, reused from the upgrade that did not finish: stacks it deployed show no changes.`);
     const deployment: UpgradeDeploymentOptions = {
       refreshHosts: options.refreshHosts,
       hostPoolRerunCommand: refreshHostsCommand("upgrade-cluster", options, options.modules),
       clusterName: options.clusterName,
       awsRegion: options.awsRegion,
       awsProfile: options.awsProfile,
-      terminationProtection: asBoolFlag(options.terminationProtection, true),
-      deploymentId: options.deploymentId,
+      terminationProtection,
+      deploymentId,
       forceBuildBootstrap: options.forceBuildBootstrap === true,
       rollback: options.rollback !== false,
       optimizeDeployment: options.optimizeDeployment === true,
@@ -1705,8 +1951,36 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       allModules,
       moduleIds: allModules ? undefined : options.modules,
       allowReplacement: options.allowReplacement,
+      onStack: (event) => timing.stack(event),
+      serial: options.serial === true,
+      maxParallel,
     };
-    await deps.deploy(deployment);
+    try {
+      await deps.deploy(deployment);
+    } catch (error) {
+      // The settings Phases 2 and 3 wrote stay with the stacks that deployed, so the bucket copy
+      // of values.yml follows them and a retry from another machine regenerates the same rows.
+      // Termination protection stays cleared: a stack may still be replacing an instance.
+      await saveValuesFile(deps, options);
+      timing.phase("Verification");
+      try {
+        await verifyCluster(deps, { ...options, since: startedAt });
+      } catch (verification) {
+        deps.out(`warning: could not verify the cluster after the failed deployment: ${(verification as Error).message}`);
+      }
+      throw error;
+    }
+    // Every module is upgraded and serving by now; a failed second cluster pass leaves the wide
+    // rule in place, so the rest of the upgrade still runs and the failure is reported at the end.
+    let convergence: unknown;
+    timing.phase("Broker rule pass");
+    try {
+      await convergeBrokerListenerRules(deps, options, deployment);
+    } catch (error) {
+      convergence = error;
+      deps.out(`warning: ${(error as Error).message}`);
+    }
+    timing.phase("Completion");
     if (options.skipGlobalSettingsUpdate !== true) await removeObsoleteGlobalSettings(deps, options, configDir);
     let restore = cleared;
     try {
@@ -1720,6 +1994,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       deps.out(`warning: could not restore termination protection: ${(error as Error).message}`);
       await warnClearedProtection(deps, options.awsRegion, cleared);
     }
+    // restored, or already reported above; the outer catch must not report it again
+    cleared = [];
     await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput);
     await saveValuesFile(deps, options);
     if (options.keepBorrowedHosts !== true) {
@@ -1730,6 +2006,13 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       }
     }
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
+    // the rollout wait has its own row, so the Verification row stays comparable with earlier runs
+    timing.phase("Rollout settle");
+    const verified = await verifyCluster(deps, { ...options, since: startedAt, settleMs: SETTLE_LIMIT_MS, onSettled: () => timing.phase("Verification") });
+    if (convergence !== undefined) throw convergence;
+    if (!verified) {
+      throw new ClusterConfigError(`Every stack deployed, but the verification above found problems. Re-run ideactl verify-cluster --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}${options.awsProfile ? ` --aws-profile ${options.awsProfile}` : ""} once they settle; it changes nothing. Do not re-run the upgrade for this: it has finished and would roll every stack again.`);
+    }
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
     await warnClearedProtection(deps, options.awsRegion, cleared);
@@ -1757,6 +2040,8 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     // others write, so they go together: the scheduler no longer queues behind the desktop stack.
     .option("--optimize-deployment", "Deploy the stacks of one priority group in parallel. Default.", true)
     .option("--no-optimize-deployment", "Deploy one stack at a time.")
+    .option("--serial", "Use the earlier priority groups: analytics and the bastion each deploy in a group of their own.")
+    .option("--max-parallel <count>", `Stacks of one priority group deployed at once. Default: ${DEFAULT_MAX_PARALLEL}`, String(DEFAULT_MAX_PARALLEL))
     .option("--module-set <module-set>", "Name of the ModuleSet. Default: default", "default")
     .option("--force", "Skip all confirmation prompts.")
     .option(
@@ -1775,6 +2060,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
       await upgradeCluster(deps, { ...commandOptions, modules });
     });
+  registerVerifyClusterCommand(program, deps);
   program
     .command("return-hosts")
     .description("drain and remove a container host the host group holds beyond its minimum")
@@ -1894,6 +2180,7 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
     ec2,
     ecsAccountSettings,
     containerHosts,
+    clusterHealth: liveClusterHealth(),
     cloudFormation: {
       async listStackResources(input) {
         const { CloudFormationClient, ListStackResourcesCommand } = await import("@aws-sdk/client-cloudformation");

@@ -25,6 +25,12 @@ class JobNotifications(JobNotificationsProtocol):
         self.context = context
         self.notifications_client = notifications_client
 
+    @staticmethod
+    def _params(job: SocaJob) -> dict:
+        # the message is one SQS body. An array's record lists every subjob, and a wide
+        # array's list alone is larger than a message may be, so it stays on the record.
+        return Utils.to_dict(job.model_copy(update={'subjobs': None}))
+
     def job_started(self, job: SocaJob):
         if job.notifications is None:
             return
@@ -44,7 +50,7 @@ class JobNotifications(JobNotificationsProtocol):
             notification=Notification(
                 username=job.owner,
                 template_name=template_name,
-                params={'job': Utils.to_dict(job)},
+                params={'job': self._params(job)},
             )
         )
 
@@ -67,6 +73,6 @@ class JobNotifications(JobNotificationsProtocol):
             notification=Notification(
                 username=job.owner,
                 template_name=template_name,
-                params={'job': Utils.to_dict(job)},
+                params={'job': self._params(job)},
             )
         )

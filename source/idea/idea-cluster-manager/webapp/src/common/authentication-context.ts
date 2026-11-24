@@ -12,7 +12,7 @@
  */
 
 import {JwtTokenClaims, JwtTokenClaimsProvider, JwtTokenUtils} from "./token-utils";
-import {AUTH_TOKEN_EXPIRED, NETWORK_ERROR, REQUEST_TIMEOUT, SERVER_ERROR} from "./error-codes";
+import {AUTH_TOKEN_EXPIRED, NETWORK_ERROR, REQUEST_TIMEOUT, SERVER_ERROR, SERVER_ERROR_MESSAGE, NETWORK_ERROR_MESSAGE, REQUEST_TIMEOUT_MESSAGE} from "./error-codes";
 import {LocalStorageService} from "../service";
 import IdeaException from "./exceptions";
 import Utils from "./utils";
@@ -34,7 +34,11 @@ const KEY_ID_TOKEN = 'id-token'
 const KEY_SSO_AUTH = 'sso-auth'
 
 const HEADER_CONTENT_TYPE_JSON = 'application/json;charset=UTF-8'
-const NETWORK_TIMEOUT = 600000  // 10 minutes for large file downloads
+// Wait on an ordinary API call. Well above any list or form call, so only a dead connection reaches it.
+// A call that can legitimately run longer asks for LONG_REQUEST_TIMEOUT.
+export const NETWORK_TIMEOUT = 180000
+// the load balancer's idle timeout: nothing can answer later than this
+export const LONG_REQUEST_TIMEOUT = 600000
 
 /**
  * IDEA Authentication Context
@@ -43,7 +47,7 @@ const NETWORK_TIMEOUT = 600000  // 10 minutes for large file downloads
  * 2. ServiceWorker (with tokens saved in-memory)
  *
  * ServiceWorker based session management is the ideal mechanism for production applications.
- * LocalStorage mode, is an unsecure fallback mechanism when ServiceWorker cannot be initialized.
+ * LocalStorage mode keeps tokens in browser storage, where they outlive the tab; it is used only when configured.
  *
  * ServiceWorker cannot be initialized in below scenarios:
  * 1. Insecure SSL/TLS Context
@@ -56,12 +60,31 @@ const NETWORK_TIMEOUT = 600000  // 10 minutes for large file downloads
  * Refer to https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorker for Browser Compatibility for Service Workers.
  *
  * ServiceWorkers can be disabled by browsers, for eg. FireFox automatically disables ServiceWorkers in incognito mode.
- * Additionally, a user may disable service worker via browser preferences. In such scenarios, implementation will
- * automatically fall back to local storage for session management. This behavior can be customized based on server side configuration.
+ * Additionally, a user may disable service worker via browser preferences. In such scenarios, an in-memory session is
+ * kept in page memory instead (it ends when the tab closes or reloads); only session_management = local-storage uses browser storage.
  *
  */
 
+/** True when the endpoint, read relative to the origin, is on that origin. */
+export function isSameOrigin(endpoint: unknown, origin: string): boolean {
+    try {
+        return typeof endpoint === 'string' && new URL(endpoint, origin).origin === origin
+    } catch {
+        return false
+    }
+}
+
+export const SESSION_CHANGED = 'SESSION_CHANGED'
+
 export class IdeaAuthenticationContext {
+    // raised by every sign-in and sign-out: a renewal or sign-out that finishes later writes nothing
+    private generation = 0
+
+    private nextGeneration(): number {
+        this.renewalInProgress = null
+        return ++this.generation
+    }
+
 
     private readonly props: IdeaAuthenticationContextProps
 
@@ -191,9 +214,7 @@ export class IdeaAuthenticationContext {
                 message: 'Unauthorized Access'
             })
         }
-        const claims = this.claimsProvider.getClaims()
-        this.logger.debug('jwt token claims', claims)
-        return claims
+        return this.claimsProvider.getClaims()
     }
 
     isLoggedIn(): Promise<boolean> {
@@ -233,12 +254,17 @@ export class IdeaAuthenticationContext {
 
         const signOutEndpoint = `${this.authEndpoint}/Auth.SignOut`
         this.logger.info('logging out ...')
+        const generation = this.nextGeneration()
 
         return this.invoke(signOutEndpoint, request, false)
             .catch((error) => {
                 this.logger.warn('sign out failed: unable to invalidate refresh token', error)
                 return true
             }).finally(() => {
+                if (generation !== this.generation) {
+                    // a sign-in started after this sign-out: its session is the current one
+                    return true
+                }
                 this.refreshToken = null
                 this.accessToken = null
                 this.idToken = null
@@ -278,9 +304,9 @@ export class IdeaAuthenticationContext {
      * @param url
      * @param options
      */
-    private _fetch = (url: string, options: any): Promise<any> => {
+    private _fetch = (url: string, options: any, timeoutMs: number = NETWORK_TIMEOUT): Promise<any> => {
         const abortController = new AbortController()
-        const timeout = setTimeout(() => abortController.abort(), NETWORK_TIMEOUT)
+        const timeout = setTimeout(() => abortController.abort(), timeoutMs)
         options = {
             ...options,
             signal: abortController.signal
@@ -293,7 +319,7 @@ export class IdeaAuthenticationContext {
                 return {
                     success: false,
                     error_code: SERVER_ERROR,
-                    message: 'Server error'
+                    message: SERVER_ERROR_MESSAGE
                 }
             }
         }).catch(error => {
@@ -302,13 +328,13 @@ export class IdeaAuthenticationContext {
                 return {
                     success: false,
                     error_code: REQUEST_TIMEOUT,
-                    message: 'Request timed-out'
+                    message: REQUEST_TIMEOUT_MESSAGE
                 }
             } else {
                 return {
                     success: false,
                     error_code: NETWORK_ERROR,
-                    message: 'Network error'
+                    message: NETWORK_ERROR_MESSAGE
                 }
             }
         }).finally(() => {
@@ -336,7 +362,6 @@ export class IdeaAuthenticationContext {
             // since local storage is not recommended for production, this is safe to ignore.
             this.logger.debug('Local storage is not null, checking for stale tokens.')
             let accessToken = this.localStorage.getItem(KEY_ACCESS_TOKEN)
-            this.logger.debug(`Local storage access token: ${accessToken}`)
             if (accessToken !== this.accessToken) {
                 this.logger.debug('Detected stale in-memory access token, initializing from local storage.')
                 this.initializeFromLocalStorage()
@@ -402,25 +427,34 @@ export class IdeaAuthenticationContext {
             }
         }
 
-        this.logger.debug(`Auth request payload: ${JSON.stringify(request)}`)
-
         const authEndpoint = `${this.authEndpoint}/${request.header.namespace}`
         this.logger.debug(`Auth endpoint: ${authEndpoint}`)
 
-        this.renewalInProgress = this._fetch(authEndpoint, {
+        const generation = this.generation
+        const renewal: Promise<boolean> = this._fetch(authEndpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': HEADER_CONTENT_TYPE_JSON
             },
             body: JSON.stringify(request)
         }).then(result => {
-            this.logger.debug(`Auth response received: ${JSON.stringify(result)}`)
+            if (generation !== this.generation) {
+                // signed out or in again while this was out: its tokens belong to the earlier session, and the
+                // call waiting on it fails as cancelled. Not as expired, which would sign out the newer session.
+                throw {
+                    success: false,
+                    error_code: SESSION_CHANGED,
+                    message: 'You signed in again while this request was waiting. Try again.'
+                }
+            }
             if (result.success && result.payload.auth) {
                 this.logger.info('✓ access token renewed successfully')
                 this.saveAuthResult(result.payload.auth, this.ssoAuth)
                 return true
             } else {
-                if (result.error_code === REQUEST_TIMEOUT || result.error_code === NETWORK_ERROR || result.error_code === SERVER_ERROR) {
+                // GENERAL_ERROR is the user pool throttling or failing: the refresh token may still be good, so the
+                // session is kept and this call fails. A refused refresh token answers UNAUTHORIZED_ACCESS.
+                if (result.error_code === REQUEST_TIMEOUT || result.error_code === NETWORK_ERROR || result.error_code === SERVER_ERROR || result.error_code === 'GENERAL_ERROR') {
                     this.logger.debug(`Network or server error encountered: ${result.error_code}`)
                     throw result
                 } else {
@@ -430,14 +464,15 @@ export class IdeaAuthenticationContext {
             }
         }).finally(() => {
             this.logger.debug('Renewal process completed, clearing renewalInProgress marker.')
-            this.renewalInProgress = null
+            if (this.renewalInProgress === renewal) this.renewalInProgress = null
         })
+        this.renewalInProgress = renewal
 
-        return this.renewalInProgress
+        return renewal
     }
 
 
-    invoke(url: string, request: any, isPublic: boolean = false): Promise<any> {
+    invoke(url: string, request: any, isPublic: boolean = false, timeoutMs?: number): Promise<any> {
 
         const invokeApi = () => {
             let headers: any = {
@@ -451,7 +486,7 @@ export class IdeaAuthenticationContext {
             if (!isPublic) {
                 headers['Authorization'] = `Bearer ${this.accessToken}`
             }
-            return this._fetch(url, fetchOptions)
+            return this._fetch(url, fetchOptions, timeoutMs)
         }
 
         if (isPublic) {
@@ -475,6 +510,7 @@ export class IdeaAuthenticationContext {
     }
 
     initiateAuth(request: any): Promise<any> {
+        this.nextGeneration()
         const authEndpoint = `${this.authEndpoint}/${request.header.namespace}`
         return this._fetch(authEndpoint, {
             method: 'POST',
@@ -510,24 +546,5 @@ export class IdeaAuthenticationContext {
             options.headers['Authorization'] = `Bearer ${this.accessToken}`
         }
         return fetch(url, options)
-    }
-
-    /**
-     * print debug info using in-memory state.
-     * helpful to debug service worker implementation and check the in-memory state via browser console.
-     */
-    printDebugInfo() {
-        this.isLoggedIn().then(status => {
-            if (status) {
-                console.log('Is Logged In: ', 'Yes')
-                console.log('Access Token: ', this.accessToken)
-                console.log('Refresh Token: ', this.refreshToken)
-                console.log('Id Token: ', this.idToken)
-                console.log('Is SSO Auth: ', this.ssoAuth)
-                console.log('Claims: ', this.claimsProvider?.getClaims())
-            } else {
-                console.log('Is Logged In: ', 'No')
-            }
-        })
     }
 }

@@ -2,7 +2,7 @@ import React from 'react';
 import {render, screen} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 import {afterEach, expect, it, vi} from 'vitest';
-import VirtualDesktopSettings from './virtual-desktop-settings';
+import VirtualDesktopSettings, {notificationLabel, settingNotSavedMessage} from './virtual-desktop-settings';
 import {SettingsSource} from '../cluster-admin/settings-sections';
 import {initTestAppContext} from '../../test-support';
 
@@ -28,4 +28,15 @@ it.each([false, true])('shows live connection settings without retired autoscali
     }
     expect(screen.queryByText('obsolete-instance')).not.toBeInTheDocument();
     expect(screen.queryByText('retired-controller')).not.toBeInTheDocument();
+});
+
+it('names notification events in words', () => {
+    expect(notificationLabel('deleting')).toBe('Terminating');
+    expect(notificationLabel('session-shared')).toBe('Desktop shared');
+    expect(notificationLabel('some-new_event')).toBe('Some new event');
+});
+
+it('says why a save was refused when the answer gives a reason', () => {
+    expect(settingNotSavedMessage({effects: {path: 'Value out of range.'}})).toBe('The setting was not saved: Value out of range.');
+    expect(settingNotSavedMessage({})).toBe('The setting was not saved. Try again.');
 });

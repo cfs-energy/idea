@@ -1,5 +1,5 @@
-import {useState} from 'react';
-import {Box, CollectionPreferences, CollectionPreferencesProps, Pagination, Table, TextFilter} from '@cloudscape-design/components';
+import {useRef, useState} from 'react';
+import {Header, Box, CollectionPreferences, CollectionPreferencesProps, Pagination, Table, TextFilter} from '@cloudscape-design/components';
 import {ReportingColumn, ReportingNumber, ReportingRow, ReportingRows, ReportingTable as TableKind} from '../../client/reporting-model';
 import {hours, metricInfo, money, percent} from './reporting-format';
 import {InfoTitle, Missing} from './insights-components';
@@ -35,17 +35,20 @@ export default function ReportingTable({table, data, currency, timezone = 'UTC',
     onPreferences: (pageSize: number, columns: CollectionPreferencesProps.ContentDisplayItem[]) => void;
 }) {
     const [filter, setFilter] = useState('');
-    const available = availableColumns(data);
+    // Columns stay put between pages: later pages have rows with no figures, not fewer kinds of figures.
+    const seen = useRef(new Set<string>());
+    availableColumns(data).forEach(column => seen.current.add(column.id));
+    const available = REPORTING_COLUMNS.filter(column => seen.current.has(column.id) || column.id === 'label');
     const definitions = available.map(column => ({id: column.id, sortingField: column.id,
         header: column.id === 'label' ? 'Name' : <InfoTitle title={column.label}>{metricInfo(data?.coverage[column.id] ?? data?.coverage[`spend_by_facet.${column.id}`] ?? data?.listing.find(row => row.coverage[column.id])?.coverage[column.id], timezone, column.definition)}</InfoTitle>,
         cell: (row: ReportingRow) => column.id === 'label' ? (row.key === '!unallocated' ? 'No project' : row.label) : <ReportingMetric value={rowValue(row, column.id)} unit={column.unit} currency={currency}/>
     }));
-    return <Table<ReportingRow> ariaLabels={{tableLabel: `Reporting by ${table}`}} items={(data?.listing ?? []).filter(row => available.some(column => String(rowValue(row, column.id) ?? '').toLowerCase().includes(filter.toLowerCase())))}
+    return <Table<ReportingRow> ariaLabels={{tableLabel: `Reporting by ${table}`}} header={data?.total_rows != null ? <Header variant="h2" counter={`(${data.total_rows.toLocaleString()})`}>Breakdown</Header> : undefined} items={(data?.listing ?? []).filter(row => available.some(column => String(rowValue(row, column.id) ?? '').toLowerCase().includes(filter.toLowerCase())))}
         stickyColumns={{first: 1}} columnDefinitions={definitions} columnDisplay={columns.filter(column => available.some(item => item.id === column.id))} trackBy="key"
         loading={loading} loadingText="Loading rows" sortingDisabled={disabled || loading}
         sortingColumn={definitions.find(column => column.id === sortBy)} sortingDescending={descending}
         onSortingChange={({detail}) => onSort(detail.sortingColumn.sortingField as ReportingColumn, detail.isDescending ?? false)}
-        filter={<TextFilter filteringText={filter} onChange={({detail}) => setFilter(detail.filteringText)} filteringAriaLabel="Find on this page" filteringPlaceholder="Find on this page"/>}
+        filter={<TextFilter filteringText={filter} onChange={({detail}) => setFilter(detail.filteringText)} filteringAriaLabel="Find on this page" filteringPlaceholder="Find on this page. Use the filter above to search everyone."/>}
         empty={loading || !data ? null : <Box textAlign="center">{filter ? 'No matches on this page' : 'No costs or activity in this period'}</Box>}
         pagination={<Pagination currentPageIndex={page} pagesCount={page + (data?.paginator.cursor ? 1 : 0)} openEnd={!!data?.paginator.cursor} disabled={disabled || loading}
             onChange={({detail}) => onPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel: 'Next page', previousPageLabel: 'Previous page', pageLabel: page => `Page ${page}`}}/>}

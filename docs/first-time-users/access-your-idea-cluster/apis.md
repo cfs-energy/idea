@@ -141,33 +141,33 @@ Accounts.CreateUser namespace requires elevated access. Make sure to test this A
 import requests
 import json
 import sys
-IDEA_ENDPOINT = "HTTPS://<DNS>"
-IDEA_USER = "USER_WITH_ADMIN_PRIVILEGES"
-IDEA_PASSWORD = "PASSWORD"
+
+IDEA_ENDPOINT = 'HTTPS://<DNS>'
+IDEA_USER = 'USER_WITH_ADMIN_PRIVILEGES'
+IDEA_PASSWORD = 'PASSWORD'
 
 # Initiate Auth and retrieve Access Token
 
 ## Prepare Payload
 get_auth_data = {
-    "header": {
-        "namespace": "Auth.InitiateAuth"
+    'header': {'namespace': 'Auth.InitiateAuth'},
+    'payload': {
+        'auth_flow': 'USER_PASSWORD_AUTH',
+        'username': IDEA_USER,
+        'password': IDEA_PASSWORD,
     },
-    "payload": {
-        "auth_flow": "USER_PASSWORD_AUTH",
-        "username": IDEA_USER,
-        "password": IDEA_PASSWORD
-    }
 }
 
 ## Prepare Header
 get_auth_headers = {'Content-Type': 'application/json'}
 
 ## Submit request and retrieve access token
-get_auth_request = requests.post(f"{IDEA_ENDPOINT}/cluster-manager/api/v1",
-                                 headers=get_auth_headers,
-                                 data=json.dumps(get_auth_data),
-                                 verify=False # in case you are using self-signed cert
-                                 ).json()
+get_auth_request = requests.post(
+    f'{IDEA_ENDPOINT}/cluster-manager/api/v1',
+    headers=get_auth_headers,
+    data=json.dumps(get_auth_data),
+    verify=False,  # in case you are using self-signed cert
+).json()
 if get_auth_request['success']:
     access_token = get_auth_request['payload']['auth']['access_token']
 else:
@@ -177,34 +177,33 @@ else:
 
 ## Prepare Payload
 create_user_data = {
-            "header": {
-                "namespace": "Accounts.CreateUser"
-            },
-            "payload": {
-                "user": {
-                    "username": "testuser1",
-                    "password": "p@sswordTest123",
-                    "email": "invalid@email.none",
-                    "sudo": False
-                },
-                "email_verified": True
-}}
+    'header': {'namespace': 'Accounts.CreateUser'},
+    'payload': {
+        'user': {
+            'username': 'testuser1',
+            'password': 'p@sswordTest123',
+            'email': 'invalid@email.none',
+            'sudo': False,
+        },
+        'email_verified': True,
+    },
+}
 
 ## Prepare Headers
 create_user_headers = {
     'Content-Type': 'application/json',
-    'Authorization': f'Bearer {access_token}'
+    'Authorization': f'Bearer {access_token}',
 }
 
 ## Submit request
-create_user_request = requests.post(f'{IDEA_ENDPOINT}/cluster-manager/api/v1',
-                                    data=json.dumps(create_user_data),
-                                    headers=create_user_headers,
-                                    verify=False # in case you are using self-signed cert
-                                 ).json()
+create_user_request = requests.post(
+    f'{IDEA_ENDPOINT}/cluster-manager/api/v1',
+    data=json.dumps(create_user_data),
+    headers=create_user_headers,
+    verify=False,  # in case you are using self-signed cert
+).json()
 
 print(create_user_request)
-
 ```
 
 Response:

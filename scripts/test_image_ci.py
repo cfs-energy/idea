@@ -39,8 +39,9 @@ def _primary_fingerprint(armored):
 
 
 class ImageCiTests(unittest.TestCase):
-    def test_both_smokes_import_services_in_the_image(self):
-        for path in ('scripts/ci-smoke-images.sh', '.github/workflows/build_push.yaml'):
+    def test_the_smoke_imports_services_in_the_image(self):
+        # one smoke, in the action both the release build and the pull request check call
+        for path in ('.github/actions/build_control_plane_image/action.yml',):
             lines = (ROOT / path).read_text().splitlines()
             commands = [line for line in lines if '--entrypoint python3.13' in line]
             self.assertEqual(len(commands), 1, path)
@@ -84,7 +85,11 @@ class ImageCiTests(unittest.TestCase):
             _primary_fingerprint((image / 'NICE-GPG-KEY').read_text()),
             '5B9EEBC864449701F6CE566A11B5C70A170C6114',
         )
-        for path in ('scripts/ci-stage-images.sh', '.github/workflows/build_push.yaml'):
+        for path in (
+            'scripts/ci-stage-images.sh',
+            '.github/workflows/build_push.yaml',
+            '.github/actions/build_control_plane_image/action.yml',
+        ):
             self.assertNotIn('/NICE-GPG-KEY"', (ROOT / path).read_text(), path)
         text = (image / 'Dockerfile').read_text()
         self.assertIn(
@@ -109,6 +114,22 @@ class ImageCiTests(unittest.TestCase):
         self.assertEqual(len(installs), 3)
         for line in installs:
             self.assertLess(check, text.index(line))
+
+    def test_release_tag_read_back_retries_stale_ecr_manifests(self):
+        text = (ROOT / '.github/workflows/build_push.yaml').read_text()
+        step = text.split('- name: Tag the candidate image as the release', 1)[1]
+        step = step.split('- name: Publish the release', 1)[0]
+        # the candidate check stays a single strict comparison
+        self.assertIn(
+            'test "$(digest "${REPOSITORY}:${CANDIDATE_TAG#v}")" = "${IMAGE#*@}"\n',
+            step,
+        )
+        loop = step[step.index('for TAG in') :]
+        self.assertIn('for TRY in 1 2 3 4 5 6; do', loop)
+        self.assertIn('sleep 10', loop)
+        self.assertIn('continue 2', loop)
+        # exhausting the tries must fail the step
+        self.assertLess(loop.index('done'), loop.index('exit 1'))
 
     def test_unused_signer_is_absent_from_runtime_and_dev(self):
         for name in ('runtime.in', 'runtime.txt', 'dev.txt'):

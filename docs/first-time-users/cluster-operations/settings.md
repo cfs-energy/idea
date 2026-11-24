@@ -10,7 +10,7 @@ Choose **Edit** on one card, change its values, then choose **Save** or **Cancel
 | --- | --- |
 | General | Portal appearance, Regional defaults, Maintenance notice |
 | Desktops | Desktop placement, Desktop policy, Desktop schedule, Stopped desktop cleanup |
-| Jobs | Job limits and placement, Fair-share scheduling, Scratch storage |
+| Jobs | Job limits and placement, Fair-share scheduling, Scratch cleanup, Scratch storage |
 | AI access | Amazon Bedrock access, models, usage, and spending controls |
 | Notifications | Email delivery, Notifications, Email templates |
 | Users and sign-in | Account synchronization, Sign-in, Directory connection, Directory mapping, AD automation |
@@ -25,7 +25,7 @@ The **Advanced** section in a card is collapsed by default. Search opens it when
 
 ## Effects and read-only values
 
-Runtime settings have no badge. A card shows at most one effect badge: **Applies after restart**, or **Applies on next upgrade** when any editable value in the card has a deployment effect. Saving does not restart a service or start an upgrade.
+Runtime settings have no badge. A card shows at most one effect badge: **Applies after restart**, **Applies on next ideactl bootstrap** when a value in the card is applied only by `ideactl bootstrap` (the scheduler log archive retention), or **Applies on next upgrade** when any editable value in the card has a deployment effect. Saving does not restart a service, run a bootstrap or start an upgrade.
 
 Installed regions, generated resource identities, internal wiring, one-time installation values, and pinned package or driver values can be read-only. A portal edit would not safely recreate infrastructure or replace installed software, so use the relevant installation, migration, image-build, or upgrade workflow instead.
 

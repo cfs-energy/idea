@@ -20,6 +20,7 @@ from ideasdk.aws.image_builds import (
     check_builder_type_architecture,
     default_builder_instance_type,
     sanitize_aws_message,
+    terminate_old_stopped_builders,
     unique_build_version,
     BUILD_STATUS_COMPLETE,
     BUILD_STATUS_FAILED,
@@ -557,7 +558,9 @@ class ConditionTable(FakeTable):
         python = expression
         python = re.sub(
             r'attribute_not_exists\(([#\w]+)\)',
-            lambda m: f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)',
+            lambda m: (
+                f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)'
+            ),
             python,
         )
         python = re.sub(r'NOT (#\w+) IN \(([^)]*)\)', r'(\1 not in [\2])', python)
@@ -802,6 +805,77 @@ def test_update_fields_sets_only_those_attributes_unless_a_job_holds_the_row():
         'building',
         'i-1',
     )
+
+
+def test_a_resumed_row_with_no_clock_starts_one_at_the_resume():
+    from ideasdk.aws.image_builds import bake_overdue, resume_record
+
+    started = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status='checking',
+        image_id='ami-1',
+        started_on=started,
+    )
+    context = Mock()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [{'ImageId': 'ami-1', 'State': 'available'}]
+    }
+    resumed = resume_record(context, Mock(), record, Mock())
+    assert resumed.status == 'test_launching'
+    assert resumed.attempt_started_on > started
+    assert not bake_overdue(
+        resumed, resumed.attempt_started_on + timedelta(hours=1), timedelta(hours=2)
+    )
+
+
+def test_a_row_requeued_after_a_restart_starts_its_clock_again():
+    from ideasdk.aws.image_builds import resume_record
+
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status='building',
+        ami_name='gone',
+        started_on=datetime(2026, 11, 6, 8, tzinfo=timezone.utc),
+        attempt_started_on=datetime(2026, 11, 6, 8, tzinfo=timezone.utc),
+    )
+    context = Mock()
+    context.aws().ec2().describe_images.return_value = {'Images': []}
+    resumed = resume_record(context, Mock(), record, Mock())
+    assert resumed.status == 'queued'
+    assert resumed.attempt_started_on is None
+
+
+@pytest.mark.parametrize('status', ['queued', 'waiting_capacity'])
+def test_time_that_costs_nothing_is_not_on_the_clock(status):
+    from ideasdk.aws.image_builds import bake_overdue
+
+    started = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status=status,
+        started_on=started,
+        attempt_started_on=started,
+    )
+    assert not bake_overdue(record, started + timedelta(days=3), timedelta(hours=2))
+
+
+def test_a_row_with_no_clock_is_not_overdue_and_says_it_needs_one():
+    from ideasdk.aws.image_builds import bake_overdue, needs_attempt_clock
+
+    started = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    row = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', status='building', started_on=started
+    )
+    assert not bake_overdue(row, started + timedelta(days=3), timedelta(hours=2))
+    assert needs_attempt_clock(row)
+    row.status = 'queued'
+    assert not needs_attempt_clock(row)
+    row.status = 'waiting_capacity'
+    assert not needs_attempt_clock(row)
 
 
 def test_resume_goes_to_the_test_launch_when_the_image_exists():
@@ -1162,3 +1236,352 @@ def test_a_legacy_sweep_that_deletes_nothing_still_logs_its_summary():
         'legacy image sweep: 0 candidates, 0 kept (0 referenced, 0 too new, '
         '0 in flight), 0 deleted, capped=no'
     )
+
+
+def test_a_path_on_a_hung_mount_does_not_answer(monkeypatch):
+    import threading
+    from ideasdk.aws import validation_identity
+
+    release = threading.Event()
+    monkeypatch.setattr(validation_identity.os, 'lstat', lambda path: release.wait(5))
+    try:
+        assert validation_identity.path_answers('/data/home/x', 0.05) is False
+    finally:
+        release.set()
+
+
+def test_a_missing_path_is_still_an_answer(tmp_path):
+    from ideasdk.aws.validation_identity import path_answers
+
+    assert path_answers(str(tmp_path)) is True
+    assert path_answers(str(tmp_path / 'absent')) is True
+
+
+class TagFilteringEc2:
+    """applies describe_instances tag filters the way EC2 does, and records terminations"""
+
+    def __init__(self, instances):
+        self.instances = instances
+        self.terminated = []
+
+    def describe_instances(self, Filters):
+        found = self.instances
+
+        def tags(instance):
+            return {t['Key']: t['Value'] for t in instance.get('Tags', [])}
+
+        for f in Filters:
+            if f['Name'] == 'tag-key':
+                found = [i for i in found if f['Values'][0] in tags(i)]
+            elif f['Name'].startswith('tag:'):
+                key = f['Name'][len('tag:') :]
+                found = [i for i in found if tags(i).get(key) in f['Values']]
+        return {'Reservations': [{'Instances': found}]}
+
+    def terminate_instances(self, InstanceIds):
+        self.terminated.extend(InstanceIds)
+
+
+def test_the_stopped_builder_sweep_leaves_another_clusters_builder_alone():
+    import time as time_module
+
+    old = str(int(time_module.time() - 2 * 86400))
+
+    def stopped_builder(instance_id, cluster):
+        return {
+            'InstanceId': instance_id,
+            'Tags': [
+                {'Key': STOPPED_AT_TAG, 'Value': old},
+                {'Key': 'idea:ClusterName', 'Value': cluster},
+                {'Key': 'idea:ModuleId', 'Value': 'vdc'},
+            ],
+        }
+
+    ec2 = TagFilteringEc2(
+        [
+            stopped_builder('i-ours', 'idea-test'),
+            stopped_builder('i-theirs', 'idea-other'),
+        ]
+    )
+    context = MagicMock()
+    context.cluster_name.return_value = 'idea-test'
+    context.module_id.return_value = 'vdc'
+    context.aws().ec2.return_value = ec2
+
+    assert terminate_old_stopped_builders(context, Mock()) == ['i-ours']
+    assert ec2.terminated == ['i-ours']
+
+
+def test_a_custom_build_in_its_checking_phase_is_repaired_after_a_restart():
+    # SI-20: only 'building' was repaired, so a restart during 'checking' locked the slot
+    import socket
+
+    db = records_db()
+    context = MagicMock()
+    context.module_id.return_value = 'scheduler'
+    context.aws().ec2().describe_instances.return_value = {'Reservations': []}
+    db.context = context
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='arm64',
+            status='checking',
+            instance_id='i-checking',
+            host=socket.gethostname(),
+            started_on=datetime.now(tz=timezone.utc),
+        )
+    )
+    assert db.sweep_orphans(Mock()) == ['rocky9/arm64']
+    assert db.get('rocky9', 'arm64').status == BUILD_STATUS_FAILED
+    context.aws().ec2().stop_instances.assert_called_once_with(
+        InstanceIds=['i-checking']
+    )
+
+
+@pytest.mark.parametrize(
+    'region,host',
+    [
+        ('us-east-1', 'us-east-1.console.aws.amazon.com'),
+        ('us-gov-west-1', 'us-gov-west-1.console.amazonaws-us-gov.com'),
+        ('cn-north-1', 'console.amazonaws.cn'),
+    ],
+)
+def test_console_links_use_the_partitions_host(region, host):
+    # SI-25: GovCloud links pointed at the commercial console
+    from ideasdk.aws.image_builds import console_host
+
+    assert console_host(region) == host
+
+
+@pytest.mark.parametrize(
+    'volume_gb, iops, throughput',
+    [
+        # 4 GiB allows 2000 IOPS, below the 3000 every gp3 volume gets; 750 = 3000 / 4
+        (4, 3000, 750),
+        # the compute floor: 500 x 10 = 5000 IOPS, whose 1250 MiB/s is capped at 1000
+        (10, 5000, 1000),
+        (20, 10000, 1000),
+        # 32 GiB is the first size the full 16000 fits; larger volumes stay there
+        (32, 16000, 1000),
+        (100, 16000, 1000),
+    ],
+)
+def test_the_builder_disk_is_gp3_at_the_most_the_size_allows(
+    volume_gb, iops, throughput
+):
+    from ideasdk.aws.image_builds import builder_root_ebs
+
+    ebs = builder_root_ebs(volume_gb)
+    assert ebs == {
+        'VolumeSize': volume_gb,
+        'VolumeType': 'gp3',
+        'Iops': iops,
+        'Throughput': throughput,
+    }
+    assert ebs['Iops'] <= max(3000, 500 * volume_gb)
+    assert ebs['Throughput'] <= ebs['Iops'] / 4
+
+
+class _Config:
+    def __init__(self, values):
+        self.values = values
+
+    def get_config(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_string(self, key, default=None):
+        return self.values.get(key, default)
+
+
+def _slow_config():
+    return {
+        'global-settings.package_config': {
+            'linux_packages': {'application': ['cmake', 'tcl']},
+            'aws_ssm': {'x86_64': 'https://example.invalid/ssm.rpm'},
+        },
+        'shared-storage': {
+            'home': {'provider': 'efs', 'mount_dir': '/home'},
+            'scratch': {'provider': 'fsx_lustre'},
+        },
+        'scheduler.provider': 'openpbs',
+        'global-settings.gpu_settings': {'nvidia': {'driver': '580'}},
+    }
+
+
+def _bootstrap(tmp_path):
+    from ideasdk.aws.image_builds import SLOW_INPUT_TEMPLATES
+
+    for name in SLOW_INPUT_TEMPLATES[:2]:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'install {name}')
+    return str(tmp_path)
+
+
+def test_the_slow_inputs_fingerprint_ignores_key_order(tmp_path):
+    from ideasdk.aws.image_builds import inputs_fingerprint, lineage_tags, slow_inputs
+
+    bootstrap = _bootstrap(tmp_path)
+    values = _slow_config()
+    shuffled = {key: values[key] for key in reversed(list(values))}
+    shuffled['global-settings.package_config'] = {
+        'aws_ssm': values['global-settings.package_config']['aws_ssm'],
+        'linux_packages': values['global-settings.package_config']['linux_packages'],
+    }
+    shuffled['shared-storage'] = {
+        'scratch': values['shared-storage']['scratch'],
+        'home': values['shared-storage']['home'],
+    }
+    first = inputs_fingerprint(slow_inputs(_Config(values), bootstrap))
+    assert first == inputs_fingerprint(slow_inputs(_Config(shuffled), bootstrap))
+    assert len(first) == 64
+    assert lineage_tags(_Config(values), bootstrap, 'ami-root') == {
+        'idea:BakeMode': 'full',
+        'idea:BakeRootImage': 'ami-root',
+        'idea:BakeInputs': first,
+        'idea:BakeLineageDepth': '0',
+    }
+
+
+def _changed(values, key, value):
+    values = dict(values)
+    values[key] = value
+    return values
+
+
+@pytest.mark.parametrize(
+    'change',
+    [
+        lambda v: _changed(
+            v,
+            'global-settings.package_config',
+            {'linux_packages': {'application': ['cmake', 'tcl', 'tk']}},
+        ),
+        lambda v: _changed(
+            v, 'shared-storage', {'home': {'provider': 'fsx_netapp_ontap'}}
+        ),
+        lambda v: _changed(v, 'scheduler.provider', 'slurm'),
+        lambda v: _changed(
+            v, 'global-settings.gpu_settings', {'nvidia': {'driver': '590'}}
+        ),
+    ],
+    ids=['package-pins', 'storage-providers', 'scheduler-provider', 'gpu-settings'],
+)
+def test_the_slow_inputs_fingerprint_changes_with_each_input(tmp_path, change):
+    from ideasdk.aws.image_builds import inputs_fingerprint, slow_inputs
+
+    bootstrap = _bootstrap(tmp_path)
+    values = _slow_config()
+    before = inputs_fingerprint(slow_inputs(_Config(values), bootstrap))
+    after = inputs_fingerprint(slow_inputs(_Config(change(values)), bootstrap))
+    assert before != after
+
+
+def test_the_slow_inputs_fingerprint_changes_with_a_template(tmp_path):
+    from ideasdk.aws.image_builds import (
+        SLOW_INPUT_TEMPLATES,
+        inputs_fingerprint,
+        slow_inputs,
+    )
+
+    bootstrap = _bootstrap(tmp_path)
+    config = _Config(_slow_config())
+    before = inputs_fingerprint(slow_inputs(config, bootstrap))
+    (tmp_path / SLOW_INPUT_TEMPLATES[0]).write_text('install a newer version')
+    edited = inputs_fingerprint(slow_inputs(config, bootstrap))
+    (tmp_path / SLOW_INPUT_TEMPLATES[-1]).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / SLOW_INPUT_TEMPLATES[-1]).write_text('a template that was absent')
+    added = inputs_fingerprint(slow_inputs(config, bootstrap))
+    assert len({before, edited, added}) == 3
+
+
+def test_the_slow_inputs_fingerprint_reads_a_pyhocon_null_as_null(tmp_path):
+    from pyhocon import ConfigFactory
+
+    from ideasdk.aws.image_builds import inputs_fingerprint, slow_inputs
+
+    bootstrap = _bootstrap(tmp_path)
+    tree = ConfigFactory.parse_string('a { sha256 = null, link = "x" }')
+    first = inputs_fingerprint(
+        slow_inputs(_Config({'global-settings.package_config': tree}), bootstrap)
+    )
+    again = ConfigFactory.parse_string('a { link = "x", sha256 = null }')
+    assert first == inputs_fingerprint(
+        slow_inputs(_Config({'global-settings.package_config': again}), bootstrap)
+    )
+    assert first == inputs_fingerprint(
+        slow_inputs(
+            _Config(
+                {'global-settings.package_config': {'a': {'sha256': None, 'link': 'x'}}}
+            ),
+            bootstrap,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    'base_os, region, unavailable',
+    [
+        ('rocky9', 'us-gov-west-1', True),
+        ('rocky10', 'us-gov-east-1', True),
+        ('rocky8', 'us-gov-west-1', True),
+        ('rhel9', 'us-gov-west-1', False),
+        ('rocky9', 'us-east-2', False),
+        ('rocky9', None, False),
+    ],
+)
+def test_rocky_is_not_available_in_the_govcloud_partition(base_os, region, unavailable):
+    from ideasdk.aws.image_builds import partition_unavailable_reason, region_partition
+
+    reason = partition_unavailable_reason(base_os, region)
+    assert bool(reason) is unavailable
+    if unavailable:
+        assert reason.startswith('Not available in this partition')
+        assert region_partition(region) in reason
+
+
+def test_the_shipped_ami_map_has_no_rocky_image_in_govcloud():
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).parents[2]
+        / 'ideactl'
+        / 'resources'
+        / 'config'
+        / 'region_ami_config.yml'
+    )
+    config = yaml.safe_load(path.read_text())
+    for region, entries in config.items():
+        if not str(region).startswith('us-gov-'):
+            continue
+        flat = [entries] + [v for v in (entries or {}).values() if isinstance(v, dict)]
+        assert not [os for e in flat for os in e if str(os).startswith('rocky')], region
+
+
+def test_a_call_that_never_returns_is_given_up_and_released_when_it_does():
+    import threading
+    import time as _time
+
+    from ideasdk.aws.validation_identity import call_within
+
+    assert call_within(lambda: 7, 1) == 7
+    with pytest.raises(ValueError):
+        call_within(lambda: (_ for _ in ()).throw(ValueError('x')), 1)
+
+    release = threading.Event()
+    late = []
+    started = _time.monotonic()
+    with pytest.raises(TimeoutError):
+        call_within(
+            lambda: release.wait(5) and 'fd',
+            0.1,
+            on_late=lambda result: late.append(result),
+        )
+    assert _time.monotonic() - started < 1
+    release.set()
+    deadline = _time.monotonic() + 5
+    while not late and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    assert late == ['fd']

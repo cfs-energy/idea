@@ -22,6 +22,7 @@ import type {
 import {
     errorMessage,
     wrapCfnHandler,
+    eventForLog,
 } from "../commons/cfn-response.ts";
 
 export const PHYSICAL_RESOURCE_ID = "project-role-boundaries";
@@ -167,7 +168,7 @@ export function createHandler(
 
             // Delete always reports SUCCESS.
             try {
-                logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+                logger.info(`ReceivedEvent: ${eventForLog(event)}`);
                 const properties = event.ResourceProperties;
                 const cleared = await clearBoundaries(
                     (dependencies.iam ?? createIam)(),
