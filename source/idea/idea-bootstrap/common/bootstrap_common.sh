@@ -502,11 +502,11 @@ function verify_detached_signature () {
 # Site hooks are scripts an operator keeps on the shared applications storage, run as root.
 # prepare_site_hook <hook> <sha256 setting value> <setting name> decides what runs:
 # - no hook file: returns 1 (nothing to run);
-# - setting empty: SITE_HOOK_RUN is the hook itself, as before, with a warning that names the
-#   setting and the hook's current SHA-256;
-# - setting set: the hook is copied to a root-only directory and SITE_HOOK_RUN is that copy,
-#   only when the copy's SHA-256 is the configured one. A mismatch, or a value that is not a
-#   SHA-256, stops the bootstrap (site-hook-mismatch): a host without its site setup would run
+# - otherwise the hook is copied once to a root-only directory and SITE_HOOK_RUN is that copy;
+# - setting empty: the copy runs, with a warning that names the setting and the copy's SHA-256
+#   (a hook that cannot be copied runs from its own path and fails there, as before);
+# - setting set: the copy runs only when its SHA-256 is the configured one. A mismatch, an
+#   unreadable hook, or a value that is not a SHA-256, stops the bootstrap (site-hook-mismatch): a host without its site setup would run
 #   jobs or sessions in a state nobody configured, and an altered root script must not run.
 # finish_site_hook removes the copy.
 # shellcheck disable=SC2034  # SITE_HOOK_RUN is read by the caller
@@ -520,22 +520,30 @@ function prepare_site_hook () {
   fi
   # case and surrounding whitespace are not part of the digest (the deploy check ignores both)
   want=$(tr 'A-F' 'a-f' <<< "${want}" | tr -d '[:space:]')
-  if [[ -z "${want}" ]]; then
-    got=$(sha256sum "${hook}" 2> /dev/null | awk '{print $1}')
-    log_warning "running site hook ${hook} without a checksum check: set ${setting} to ${got:-unreadable} to run only this version"
-    SITE_HOOK_RUN="${hook}"
-    return 0
-  fi
-  if [[ ! "${want}" =~ ^[0-9a-f]{64}$ ]]; then
+  if [[ -n "${want}" && ! "${want}" =~ ^[0-9a-f]{64}$ ]]; then
     fail_bootstrap site-hook-mismatch "${setting} is not a SHA-256 (64 hex characters); site hook ${hook} not run"
   fi
-  SITE_HOOK_DIR=$(mktemp -d) || fail_bootstrap site-hook-mismatch "no private directory for site hook ${hook}"
-  chmod 0700 "${SITE_HOOK_DIR}"
-  if ! cat -- "${hook}" > "${SITE_HOOK_DIR}/userdata_customizations.sh"; then
-    rm -rf "${SITE_HOOK_DIR}"
+  # one read of the shared file: the copy is hashed and the copy runs, so the SHA-256 checked or
+  # logged is the content that runs even if the shared file changes meanwhile
+  got=""
+  SITE_HOOK_DIR=$(mktemp -d) && chmod 0700 "${SITE_HOOK_DIR}" \
+    && cat -- "${hook}" > "${SITE_HOOK_DIR}/userdata_customizations.sh" \
+    && got=$(sha256sum "${SITE_HOOK_DIR}/userdata_customizations.sh" | awk '{print $1}')
+  if [[ -z "${want}" ]]; then
+    log_warning "running site hook ${hook} without a checksum check: set ${setting} to ${got:-unreadable} to run only this version"
+    if [[ -n "${got}" ]]; then
+      SITE_HOOK_RUN="${SITE_HOOK_DIR}/userdata_customizations.sh"
+    else
+      # unreadable: the hook path runs and fails as before (an image bake stops, a host goes on)
+      finish_site_hook
+      SITE_HOOK_RUN="${hook}"
+    fi
+    return 0
+  fi
+  if [[ -z "${got}" ]]; then
+    finish_site_hook
     fail_bootstrap site-hook-mismatch "site hook ${hook} could not be read"
   fi
-  got=$(sha256sum "${SITE_HOOK_DIR}/userdata_customizations.sh" | awk '{print $1}')
   if [[ "${got}" != "${want}" ]]; then
     rm -rf "${SITE_HOOK_DIR}"
     fail_bootstrap site-hook-mismatch "site hook ${hook} has SHA-256 ${got}, not the ${setting} value ${want}; not run (set ${setting} again after each edit)"

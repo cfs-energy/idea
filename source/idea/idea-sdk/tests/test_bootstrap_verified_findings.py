@@ -549,9 +549,21 @@ def message_key(setting, module_id='vdc'):
     return f'{module_id}.{setting.split(".", 1)[1]}'
 
 
-def site_hook_run(tmp_path, template, setting, path, configured, present=True):
+def site_hook_run(
+    tmp_path,
+    template,
+    setting,
+    path,
+    configured,
+    present=True,
+    swap=None,
+    uncopied=False,
+):
+    """swap: content written over the shared hook as soon as a digest has been taken;
+    uncopied: the hook cannot be copied (root reads any mode, so the failure is stood in)"""
     import hashlib
     import re
+    import shlex
 
     config = Config()
     if configured is not None:
@@ -598,10 +610,20 @@ def site_hook_run(tmp_path, template, setting, path, configured, present=True):
         f'>> {tmp_path}/hook.log',
     )
     common = open(COMMON).read()
+    swapper = ''
+    if swap is not None:
+        # someone who can write the shared directory replaces the hook between reads
+        swapper = (
+            'sha256sum() { command sha256sum "$@"; printf %s '
+            f'{shlex.quote(swap)} > {shlex.quote(str(hook))}; }}\n'
+        )
+    if uncopied:
+        swapper += 'cat() { [[ "${*: -1}" != */userdata_customizations.sh ]] && command cat "$@"; }\n'
     result = bash(
         f"source /dev/stdin <<'COMMON'\n{common}\nCOMMON\n"
         + LOG_STUBS
         + FAILURE
+        + swapper
         + f'export RECORD={tmp_path}/ran\n'
         + 'flock() { :; }\n'
         + block
@@ -657,6 +679,43 @@ def test_site_hook_without_a_digest_runs_as_before_and_names_the_setting(
     assert ran == 'ran as userdata_customizations.sh\n'
     assert 'warning running site hook' in result.stdout
     assert f'set {message_key(setting)} to {digest}' in result.stdout
+
+
+@pytest.mark.parametrize('template,setting,path', SITE_HOOKS)
+@pytest.mark.parametrize('pinned', [False, True])
+def test_what_runs_is_the_content_whose_digest_was_logged(
+    tmp_path, template, setting, path, pinned
+):
+    import hashlib
+
+    digest = hashlib.sha256(HOOK.encode()).hexdigest()
+    result, _, ran = site_hook_run(
+        tmp_path,
+        template,
+        setting,
+        path,
+        digest if pinned else None,
+        swap='#!/bin/bash\necho swapped >> "$RECORD"\n',
+    )
+    assert result.returncode == 0 and 'CONTINUED' in result.stdout, (
+        result.stdout + result.stderr
+    )
+    assert ran == 'ran as userdata_customizations.sh\n'
+    assert digest in result.stdout
+
+
+@pytest.mark.parametrize('template,setting,path', SITE_HOOKS)
+def test_unpinned_site_hook_that_cannot_be_copied_runs_from_its_path_as_before(
+    tmp_path, template, setting, path
+):
+    result, _, ran = site_hook_run(
+        tmp_path, template, setting, path, None, uncopied=True
+    )
+    assert result.returncode == 0 and 'CONTINUED' in result.stdout, (
+        result.stdout + result.stderr
+    )
+    assert f'set {message_key(setting)} to unreadable' in result.stdout
+    assert ran == 'ran as userdata_customizations.sh\n'
 
 
 @pytest.mark.parametrize('template,setting,path', SITE_HOOKS)

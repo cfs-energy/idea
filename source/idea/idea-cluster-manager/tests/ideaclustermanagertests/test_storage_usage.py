@@ -812,11 +812,20 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
     assert analytics._failed_at == float('-inf')
 
 
+def labels_answer(labels=MONTHS):
+    """ONTAP's answer about the volume root, with the bucket labels its rows leave out"""
+    return dict(
+        records=[
+            dict(analytics=dict(by_modified_time=dict(bytes_used=dict(labels=labels))))
+        ]
+    )
+
+
 def filer(
     monkeypatch,
     tree,
     answers,
-    labels=(200, dict(records=[{}])),
+    labels=(200, labels_answer()),
     volumes=None,
     closed=(),
 ):
@@ -898,6 +907,59 @@ def test_a_refused_volume_root_backs_off_that_volume(monkeypatch, tree, status):
     assert analytics.status(tree) == dict(state='failed')
     assert analytics.folder(tree) is None
     assert len(sent) == reads
+
+
+@pytest.mark.parametrize(
+    'answer',
+    (
+        dict(records=[]),
+        dict(),
+        dict(records=[{}]),
+        dict(records=[dict(analytics=dict(by_modified_time=dict(bytes_used={})))]),
+        labels_answer([]),
+    ),
+)
+def test_a_volume_root_without_bucket_labels_is_a_failed_read_not_kept(
+    monkeypatch, tree, answer
+):
+    # every byte would count as unchanged for three months: the volume backs off as a refused
+    # one does, and nothing is kept for the labels' hour
+    values = [0] * 18
+    values[5] = 100  # 2026-11
+    listing = dict(records=[analytics_row('.', 1000, 40, values)])
+    root = labels_answer()
+    analytics, sent = filer(
+        monkeypatch, tree, {'%2Falice': (200, listing)}, labels=(200, root)
+    )
+    root.clear()
+    root.update(answer)
+    assert analytics.folder(tree) is None
+    assert analytics._labels == {}
+    reads = len(sent)
+    assert analytics.status(tree) == dict(state='failed')
+    assert analytics.folder(tree) is None
+    assert len(sent) == reads
+    # other volumes stay on
+    assert analytics._failed_at == float('-inf')
+    # once the volume's minute is over, a good answer is used at once
+    root.clear()
+    root.update(labels_answer())
+    analytics._refused_at.clear()
+    found = analytics.folder(tree)
+    assert found['self']['unchanged_90_days_bytes'] == 900
+
+
+def test_bucket_labels_are_kept_for_their_hour(monkeypatch, tree):
+    listing = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = filer(
+        monkeypatch,
+        tree,
+        {'%2Falice': (200, listing), '%2Falice%2Freports': (200, listing)},
+    )
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+    assert analytics.folder(tree + '/reports')['self']['bytes'] == 1000
+    assert len([path for path in sent if 'return_metadata' in path]) == 1
+    assert analytics._labels['u-1'][1] == MONTHS
 
 
 def test_a_volume_the_role_cannot_read_leaves_the_others_on(monkeypatch, tree):
