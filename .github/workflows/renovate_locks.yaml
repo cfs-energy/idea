@@ -20,7 +20,7 @@ jobs:
       - name: Sign in as the repository's app
         id: app
         continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.RENOVATE_LOCKS_APP_ID }}
           private-key: ${{ secrets.RENOVATE_LOCKS_APP_PRIVATE_KEY }}
@@ -32,7 +32,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.12
           install_args: node python uv pypi:pip-tools npm:yarn
       - name: Regenerate the npm and yarn locks
         run: |
