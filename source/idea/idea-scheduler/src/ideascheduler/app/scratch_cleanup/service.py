@@ -131,6 +131,11 @@ LEASE_RENEW_SECONDS = 60
 STATE_RECHECK_SECONDS = 15
 # the switches are three consistent table reads, and checks come every hundred operations
 GATE_SECONDS = 1
+# a folder whose files cannot be removed (EPERM on an immutable file, EIO on a damaged object)
+# is tried in this many runs, then left for an administrator with one alert: a passing error
+# (an object briefly unavailable) clears in a second or third try, a lasting one does not, and
+# every try removes nothing else of it
+MAX_REMOVAL_ATTEMPTS = 3
 
 
 class RunStopped(Exception):
@@ -139,6 +144,14 @@ class RunStopped(Exception):
 
 class SwitchedOff(RunStopped):
     """an administrator's own choice, so no alert"""
+
+
+class FolderFailed(Exception):
+    """one folder could not be removed: the run goes on with the others"""
+
+    def __init__(self, path: str, error: str, attempts: int, final: bool):
+        super().__init__(f'Removing {path} failed: {error}')
+        self.path, self.error, self.attempts, self.final = path, error, attempts, final
 
 
 @dataclass(frozen=True)
@@ -1847,13 +1860,30 @@ class ScratchCleanupService:
                 raise RunStopped(problem)
             try:
                 outcome = self._remove_one(file_system, row, limits, aliases, run)
-            except Exception:
+            except Exception as e:
                 if row.removed_entries:
                     run['partial_folders'] += 1
                     metrics.add('folder_partly_removed')
                     self._mark_job(row, 'scratch_partly_removed_at')
                     self._for_next_digest(row, partly=True)
-                raise
+                if not isinstance(e, FolderFailed):
+                    raise
+                # that folder alone: the ones behind it are not held up by it
+                run['failed_folders'] = run.get('failed_folders', 0) + 1
+                metrics.add('folder_failed')
+                if e.final:
+                    self._alert(
+                        file_system,
+                        f'{e.path} could not be removed in {e.attempts} tries and is left '
+                        f'for an administrator: {e.error}',
+                        run['run_id'],
+                    )
+                else:
+                    self._logger.warning(
+                        f'{e} (try {e.attempts} of {MAX_REMOVAL_ATTEMPTS}); the next run '
+                        f'tries it again'
+                    )
+                continue
             if outcome is None:
                 run['skipped_folders'] += 1
                 metrics.add('folder_skipped')
@@ -1969,6 +1999,12 @@ class ScratchCleanupService:
         if _partly_removed(row, unfinished):
             return None
         resume_until = _resume_until(row, unfinished)
+        # the tries an earlier run already spent on this very removal
+        tries_before = (
+            unfinished[(row.device, row.inode)].get('attempts', 0)
+            if resume_until
+            else 0
+        )
         reason = decide_contents(contents, decision.records, resume_until=resume_until)
         if reason != Reason.ELIGIBLE:
             self._logger.info(f'{row.path}: now {reason.value}; left alone')
@@ -2037,8 +2073,18 @@ class ScratchCleanupService:
             # the folder is not what was checked any more, so nothing finishes this by itself
             self._record_interruption(audit, row, progress, 'failed', e)
             raise RunStopped(f'Removing {row.path} failed: {e}') from e
+        except OSError as e:
+            # a file of this folder could not be removed: the folder fails, not the run. it is
+            # tried again in later runs, and after MAX_REMOVAL_ATTEMPTS left as failed
+            attempts = tries_before + 1
+            final = attempts >= MAX_REMOVAL_ATTEMPTS
+            audit['attempts'] = attempts
+            self._record_interruption(
+                audit, row, progress, 'failed' if final else 'started', e
+            )
+            raise FolderFailed(row.path, str(e), attempts, final) from e
         except Exception as e:
-            # an I/O error says nothing about the folder, so a later run can try again
+            # an error of this process, not of the folder: the run stops, a later run tries
             self._record_interruption(audit, row, progress, 'started', e)
             raise RunStopped(f'Removing {row.path} failed: {e}') from e
         audit.update(
