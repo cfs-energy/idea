@@ -377,7 +377,9 @@ class FolderAnalytics:
             .get('bytes_used', {})
             .get('labels')
         )
-        self._labels[uuid] = (time.monotonic(), labels)
+        # an answer without them is not kept: the next read asks again
+        if labels:
+            self._labels[uuid] = (time.monotonic(), labels)
         return labels
 
     def _listing(self, client, request, deadline):
@@ -453,6 +455,14 @@ class FolderAnalytics:
                     self._refused_at[status['uuid']] = time.monotonic()
                 else:
                     self._failed(e)
+                return None
+            if not labels:
+                # without them every byte would count as unchanged: this volume backs off as a
+                # refused one does, and the next read after that asks again
+                self.logger.warning(
+                    'storage analytics volume root had no bucket labels'
+                )
+                self._refused_at[status['uuid']] = time.monotonic()
                 return None
             try:
                 records, truncated = self._records(client, request)
